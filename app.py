@@ -1224,19 +1224,124 @@ with tab5:
 
 
 
-# ==================== Tab 6: 数据质量 ====================
+# ==================== Tab 6: 数据质量监控 (高级专业版) ====================
 with tab6:
     st.subheader("数据质量监控")
-    if st.button("执行全库数据校验", type="primary"):
-        check_sql = """
-            SELECT '订单主键重复校验' AS 检验项, COUNT(order_id) - COUNT(DISTINCT order_id) AS 异常记数 FROM orders
-            UNION ALL
-            SELECT '用户孤立关联校验', COUNT(o.order_id) FROM orders o LEFT JOIN users u ON o.user_id = u.user_id WHERE u.user_id IS NULL
-            UNION ALL
-            SELECT '负数/零金额订单校验', COUNT(order_id) FROM orders WHERE total_amount <= 0
-        """
-        df_check = run_sql(check_sql)
-        df_check["校验状态"] = df_check["异常记数"].apply(
-            lambda x: "✅ PASS" if x == 0 else "❌ FAIL"
-        )
-        st.dataframe(df_check, use_container_width=True, hide_index=True)
+    st.caption("对全库核心数据表（订单、用户、商品、行为、明细）进行主键唯一性、外键关联性、数值逻辑及完整性检查。")
+
+    # 按钮：触发校验
+    run_check = st.button("🚀 执行完整数据质量检查", type="primary", key="btn_run_data_check")
+
+    if run_check:
+        with st.spinner("正在对全库数据进行多维度质量校验..."):
+            check_results = []
+
+            # ---------------- 辅助校验函数 ----------------
+            def add_check(category, name, err_cnt, detail_df=None):
+                status = "✅ PASS" if err_cnt == 0 else "❌ FAIL"
+                check_results.append({
+                    "检查类别": category,
+                    "检查项": name,
+                    "异常计数": err_cnt,
+                    "校验状态": status,
+                    "detail": detail_df
+                })
+
+            # 1. 主键重复校验 (PrimaryKey)
+            if "order_id" in df_orders.columns:
+                dup_orders = df_orders[df_orders.duplicated("order_id", keep=False)]
+                add_check("主键唯一性", "订单主键重复校验", len(dup_orders), dup_orders)
+
+            if "users" in locals() or "df_users" in locals():
+                df_u = df_users if "df_users" in locals() else users
+                dup_u = df_u[df_u.duplicated("user_id", keep=False)] if "user_id" in df_u.columns else pd.DataFrame()
+                add_check("主键唯一性", "用户主键重复校验", len(dup_u), dup_u)
+
+            if "products" in locals() or "df_products" in locals():
+                df_p = df_products if "df_products" in locals() else products
+                dup_p = df_p[df_p.duplicated("product_id", keep=False)] if "product_id" in df_p.columns else pd.DataFrame()
+                add_check("主键唯一性", "商品主键重复校验", len(dup_p), dup_p)
+
+            if "order_items" in locals() or "df_items" in locals():
+                df_i = df_items if "df_items" in locals() else order_items
+                dup_i = df_i[df_i.duplicated("item_id", keep=False)] if "item_id" in df_i.columns else pd.DataFrame()
+                add_check("主键唯一性", "订单明细主键重复校验", len(dup_i), dup_i)
+
+            if "user_behaviors" in locals() or "df_behaviors" in locals():
+                df_b = df_behaviors if "df_behaviors" in locals() else user_behaviors
+                dup_b = df_b[df_b.duplicated("behavior_id", keep=False)] if "behavior_id" in df_b.columns else pd.DataFrame()
+                add_check("主键唯一性", "行为主键重复校验", len(dup_b), dup_b)
+
+            # 2. 外键与孤立关系校验 (ForeignKey)
+            if "user_id" in df_orders.columns and ("df_users" in locals() or "users" in locals()):
+                df_u = df_users if "df_users" in locals() else users
+                valid_uids = set(df_u["user_id"].unique()) if "user_id" in df_u.columns else set()
+                orphan_orders = df_orders[~df_orders["user_id"].isin(valid_uids)]
+                add_check("关联完整性", "订单找不到对应用户 (孤立订单)", len(orphan_orders), orphan_orders)
+
+            if ("order_items" in locals() or "df_items" in locals()):
+                df_i = df_items if "df_items" in locals() else order_items
+                if "order_id" in df_i.columns:
+                    valid_oids = set(df_orders["order_id"].unique())
+                    orphan_items = df_i[~df_i["order_id"].isin(valid_oids)]
+                    add_check("关联完整性", "明细找不到对应订单 (孤立明细)", len(orphan_items), orphan_items)
+
+            # 3. 数值与业务逻辑校验 (Business Rules)
+            if "total_amount" in df_orders.columns:
+                invalid_amt = df_orders[df_orders["total_amount"] <= 0]
+                add_check("业务逻辑", "负数/零金额订单校验", len(invalid_amt), invalid_amt)
+
+            if "order_status" in df_orders.columns:
+                valid_statuses = ["CREATED", "PAID", "SHIPPED", "COMPLETED", "CANCELLED", "REFUNDED", "已付款", "已发货", "已完成", "已取消"]
+                unknown_status = df_orders[~df_orders["order_status"].isin(valid_statuses)]
+                add_check("业务逻辑", "未知订单状态校验", len(unknown_status), unknown_status)
+
+            if "created_at" in df_orders.columns:
+                future_orders = df_orders[pd.to_datetime(df_orders["created_at"]) > pd.Timestamp.now()]
+                add_check("业务逻辑", "未来时间订单校验", len(future_orders), future_orders)
+
+            # 4. 关键字段空值校验 (Null Value Checks)
+            if "city" in df_orders.columns:
+                null_city = df_orders[df_orders["city"].isna()]
+                add_check("完整性规则", "订单缺少收货城市校验", len(null_city), null_city)
+
+            df_res = pd.DataFrame(check_results)
+
+            # ---------------- 核心 KPI 汇总看板 ----------------
+            st.markdown("---")
+            total_checks = len(df_res)
+            fail_checks = len(df_res[df_res["异常计数"] > 0])
+            pass_checks = total_checks - fail_checks
+            health_score = int((pass_checks / total_checks) * 100) if total_checks > 0 else 100
+
+            qc1, qc2, qc3, qc4 = st.columns(4)
+            qc1.metric("数据健康度得分", f"{health_score} 分", delta="优秀" if health_score >= 90 else "需关注", delta_color="normal" if health_score >= 90 else "inverse")
+            qc2.metric("检查项总数", f"{total_checks} 项")
+            qc3.metric("通过检查项", f"{pass_checks} 项")
+            qc4.metric("异常/预警项", f"{fail_checks} 项", delta_color="inverse")
+
+            st.markdown("### 📋 质量检查结果明细")
+
+            # 渲染高颜值结果表格
+            def style_status(val):
+                color = "#10b981" if "PASS" in str(val) else "#ef4444"
+                return f"color: {color}; font-weight: bold;"
+
+            df_show = df_res[["检查类别", "检查项", "异常计数", "校验状态"]].copy()
+            st.dataframe(
+                df_show.style.map(style_status, subset=["校验状态"]),
+                use_container_width=True,
+                hide_index=True
+            )
+
+            # ---------------- 异常数据排查下钻 ----------------
+            if fail_checks > 0:
+                st.warning("⚠️ 发现异常数据记录！展开下方可查看具体异常数据示例：")
+                for idx, row in df_res[df_res["异常计数"] > 0].iterrows():
+                    with st.expander(f"查看【{row['检查项']}】异常明细 (共 {row['异常计数']} 条)"):
+                        st.dataframe(row["detail"].head(20), use_container_width=True)
+            else:
+                st.success("🎉 全库数据质量良好，所有检查项均为 PASS，无孤立或异常数据！")
+
+    else:
+        st.info("💡 请点击上方按钮【执行完整数据质量检查】开始质量审计。")
