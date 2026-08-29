@@ -424,29 +424,166 @@ with tab2:
 
 # ==================== Tab 3: 用户 RFM ====================
 with tab3:
-    st.subheader("用户价值 RFM 分群")
-    rfm_df = pd.DataFrame(
-        {
-            "RFM分群": [
-                "高价值核心客户",
-                "高潜力发展客户",
-                "重点挽留客户",
-                "一般流失客户",
-            ],
-            "用户规模": [1250, 2400, 1800, 950],
-            "客单价贡献": [850, 420, 210, 95],
-            "复购频次": [5.2, 3.1, 1.8, 1.1],
-        }
-    )
-    fig_rfm = px.scatter(
-        rfm_df,
-        x="用户规模",
-        y="客单价贡献",
-        size="复购频次",
-        color="RFM分群",
-        text="RFM分群",
-    )
-    st.plotly_chart(fig_rfm, use_container_width=True)
+    st.subheader("用户 RFM 分层分析")
+
+    if df_valid.empty:
+        st.warning("⚠️ 当前筛选条件下无有效订单，无法进行 RFM 分层。")
+    else:
+        # 1. 基于当前筛选数据计算真实/高质量 RFM 指标
+        max_order_date = pd.to_datetime(df_valid["created_at"]).max()
+
+        rfm_df = (
+            df_valid.groupby("user_id")
+            .agg(
+                最近购买=("created_at", "max"),
+                购买频次=("order_id", "count"),
+                消费金额=("total_amount", "sum"),
+            )
+            .reset_index()
+        )
+
+        rfm_df["最近购买"] = pd.to_datetime(rfm_df["最近购买"])
+        rfm_df["最近购买间隔"] = (
+            max_order_date - rfm_df["最近购买"]
+        ).dt.days
+
+        # RFM 打分 (1-4分)
+        rfm_df["R"] = pd.qcut(
+            rfm_df["最近购买间隔"].rank(method="first"),
+            q=4,
+            labels=[4, 3, 2, 1],
+        ).astype(int)
+        rfm_df["F"] = pd.qcut(
+            rfm_df["购买频次"].rank(method="first"),
+            q=4,
+            labels=[1, 2, 3, 4],
+        ).astype(int)
+        rfm_df["M"] = pd.qcut(
+            rfm_df["消费金额"].rank(method="first"),
+            q=4,
+            labels=[1, 2, 3, 4],
+        ).astype(int)
+
+        rfm_df["RFM总分"] = rfm_df["R"] + rfm_df["F"] + rfm_df["M"]
+
+        # 根据综合得分赋予专业分层标签
+        def label_rfm(score):
+            if score >= 10:
+                return "高价值用户"
+            elif score >= 8:
+                return "重要唤回用户"
+            elif score >= 6:
+                return "潜力用户"
+            elif score >= 4:
+                return "沉睡用户"
+            else:
+                return "一般用户"
+
+        rfm_df["用户分层"] = rfm_df["RFM总分"].apply(label_rfm)
+
+        # 构造图表展示用列名（匹配截图规范）
+        rfm_df["global_user_id"] = "U-" + rfm_df["user_id"].astype(str)
+        rfm_df["最近购买"] = rfm_df["最近购买"].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        # 2. 绘制饼图与柱状图（两列并排）
+        col_pie, col_bar = st.columns(2)
+
+        with col_pie:
+            st.markdown("**RFM 用户结构**")
+            struct_df = rfm_df["用户分层"].value_counts().reset_index()
+            struct_df.columns = ["用户分层", "人数"]
+
+            fig_pie = px.pie(
+                struct_df,
+                values="人数",
+                names="用户分层",
+                hole=0.0,
+                color_discrete_sequence=px.colors.qualitative.Set1,
+            )
+            fig_pie.update_traces(
+                textposition="inside", textinfo="percent+label"
+            )
+            fig_pie.update_layout(
+                height=380, legend=dict(orientation="v", x=1.05, y=0.5)
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        with col_bar:
+            st.markdown("**各层平均消费**")
+            avg_m_df = (
+                rfm_df.groupby("用户分层")["消费金额"].mean().reset_index()
+            )
+            avg_m_df.columns = ["用户分层", "平均消费"]
+            avg_m_df = avg_m_df.sort_values("平均消费", ascending=True)
+
+            fig_bar = px.bar(
+                avg_m_df,
+                x="用户分层",
+                y="平均消费",
+                color="用户分层",
+                labels={"平均消费": "平均消费 (元)", "用户分层": "用户分层"},
+                color_discrete_sequence=px.colors.qualitative.Set1,
+            )
+            fig_bar.update_layout(
+                height=380, showlegend=False, yaxis_title="平均消费"
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+        # 3. 分析解读
+        st.subheader("分析解读")
+
+        total_rfm_users = len(rfm_df)
+        most_common_layer = struct_df.iloc[0]["用户分层"]
+        most_common_cnt = struct_df.iloc[0]["人数"]
+
+        high_val_cnt = len(rfm_df[rfm_df["用户分层"] == "高价值用户"])
+        high_val_ratio = (
+            (high_val_cnt / total_rfm_users * 100) if total_rfm_users > 0 else 0
+        )
+
+        st.info(
+            f"本次共对 **{total_rfm_users:,}** 名购买用户完成 RFM 分层。"
+            f"人数最多的群体为“**{most_common_layer}**”，共 **{most_common_cnt:,}** 人；"
+            f"高价值用户 **{high_val_cnt:,}** 人，占 **{high_val_ratio:.1f}%**。"
+            f"不同层级可分别用于核心用户维护、潜力用户培育和沉睡用户召回。"
+        )
+
+        # 4. RFM 明细表格 (精选要展示的列)
+        display_cols = [
+            "global_user_id",
+            "最近购买",
+            "购买频次",
+            "消费金额",
+            "最近购买间隔",
+            "R",
+            "F",
+            "M",
+            "RFM总分",
+            "用户分层",
+        ]
+
+        df_table_show = (
+            rfm_df[display_cols]
+            .sort_values("消费金额", ascending=False)
+            .reset_index(drop=True)
+        )
+
+        st.dataframe(
+            df_table_show,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # 5. 下载完整 RFM 结果栏目 (导出 CSV 按钮)
+        csv_data = df_table_show.to_csv(index=False).encode("utf-8-sig")
+
+        st.download_button(
+            label="下载完整 RFM 结果",
+            data=csv_data,
+            file_name=f"RFM_Analysis_Result_{datetime.date.today()}.csv",
+            mime="text/csv",
+            type="primary",
+        )
 
 # ==================== Tab 4: 商品分析 ====================
 with tab4:
