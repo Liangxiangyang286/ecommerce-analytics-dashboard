@@ -586,6 +586,7 @@ with tab3:
         )
 
 
+
 # ==================== Tab 4: 商品分析 ====================
 with tab4:
     st.subheader("单品销售趋势")
@@ -595,7 +596,7 @@ with tab4:
     else:
         df_prod_base = df_valid.copy()
 
-        # 1. 智能提取/构建精细化的商品名称 (SKU粒度)
+        # 1. 智能提取/构建精细化的商品名称 (兼容任意数据库字段)
         if (
             "product_name" in df_prod_base.columns
             and df_prod_base["product_name"].nunique() > 10
@@ -604,29 +605,30 @@ with tab4:
         elif "goods_name" in df_prod_base.columns:
             df_prod_base["product_name"] = df_prod_base["goods_name"]
         else:
-            # 若原始数据缺乏具体商品名，结合品牌/品类/订单ID构造细粒度商品名
-            brand_col = (
-                df_prod_base["brand"]
-                if "brand" in df_prod_base.columns
-                else "精选"
-            )
-            cat_col = (
-                df_prod_base["category"]
+            # 兼容安全拼接，避免字符串与 Series 类型冲突
+            cat_series = (
+                df_prod_base["category"].astype(str)
                 if "category" in df_prod_base.columns
-                else "商品"
+                else "热销商品"
             )
+            brand_series = (
+                df_prod_base["brand"].astype(str)
+                if "brand" in df_prod_base.columns
+                else "品牌"
+            )
+            idx_series = (df_prod_base.index % 90 + 10).astype(str)
+
             df_prod_base["product_name"] = (
-                brand_col.astype(str)
-                + " "
-                + cat_col.astype(str)
-                + " "
-                + (df_prod_base.index % 90 + 10).astype(str)
+                brand_series + " " + cat_series + " " + idx_series
             )
 
         if "product_id" not in df_prod_base.columns:
-            df_prod_base["product_id"] = (
-                df_prod_base["order_id"].astype(str) + "_P"
-            )
+            if "goods_id" in df_prod_base.columns:
+                df_prod_base["product_id"] = df_prod_base["goods_id"]
+            else:
+                df_prod_base["product_id"] = (
+                    df_prod_base["order_id"].astype(str) + "_P"
+                )
 
         df_prod_base["global_product_id"] = (
             "P-"
@@ -654,7 +656,7 @@ with tab4:
 
         selected_prod_label = st.selectbox("选择商品", prod_options)
 
-        # 时间粒度选择（默认按日更直观）
+        # 时间粒度选择（默认按日）
         time_granularity = st.radio(
             "时间粒度",
             ["按日", "按月", "按季度"],
@@ -685,7 +687,7 @@ with tab4:
         pk3.metric("商品订单数", f"{single_orders:,}")
         pk4.metric("平均成交单价", f"¥{single_avg_price:,.2f}")
 
-        # 2. 绘制媲美图2的高颜值双 Y 轴趋势图
+        # 2. 绘制双 Y 轴趋势图
         if time_granularity == "按日":
             group_col = "order_date"
         elif time_granularity == "按月":
@@ -710,7 +712,7 @@ with tab4:
 
         fig_single = go.Figure()
 
-        # 销量：精致的淡黄色细柱（仿图2样式，控制柱宽不暴撑屏）
+        # 销量（淡黄色柱状图，固定柱宽）
         fig_single.add_trace(
             go.Bar(
                 x=df_single_trend[group_col],
@@ -720,11 +722,11 @@ with tab4:
                 marker_color="#fef08a",
                 marker_line_color="#fde047",
                 marker_line_width=1,
-                width=0.3 if len(df_single_trend) < 5 else None,  # 防止点少时柱子过宽
+                width=0.3 if len(df_single_trend) < 5 else None,
             )
         )
 
-        # 销售额：高亮蓝色带圆点折线
+        # 销售额（蓝色折线图）
         fig_single.add_trace(
             go.Scatter(
                 x=df_single_trend[group_col],
@@ -766,15 +768,16 @@ with tab4:
 
         st.markdown("---")
 
-        # 3. 排行榜模块 (对标图4的高专业度展现)
+        # 3. 品类与商品排行
         st.subheader("品类与商品排行")
         col_cat, col_top = st.columns(2)
 
+        cat_col_name = (
+            "category" if "category" in df_prod_base.columns else "platform"
+        )
+
         with col_cat:
             st.markdown("**品类销售额**")
-            cat_col_name = (
-                "category" if "category" in df_prod_base.columns else "brand"
-            )
             df_cat_sales = (
                 df_prod_base.groupby(cat_col_name)["total_amount"]
                 .sum()
@@ -898,6 +901,7 @@ with tab4:
             mime="text/csv",
             type="primary",
         )
+
 
 
 # ==================== Tab 5: 地域分析 ====================
