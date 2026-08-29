@@ -592,14 +592,34 @@ with tab4:
     if df_valid.empty:
         st.warning("⚠️ 当前筛选条件下无有效订单，无法展示商品分析。")
     else:
-        # 1. 构造商品唯一标识与下拉菜单选项
         df_prod_base = df_valid.copy()
-        if "product_id" not in df_prod_base.columns:
-            df_prod_base["product_id"] = (
-                df_prod_base["order_id"].astype(str) + "_P"
-            )
 
-        # 统一生成 global_product_id
+        # ---------------- 自动兼容字段名 ----------------
+        # 1. 兼容商品名称字段 (product_name / goods_name)
+        if "product_name" not in df_prod_base.columns:
+            if "goods_name" in df_prod_base.columns:
+                df_prod_base["product_name"] = df_prod_base["goods_name"]
+            elif "category" in df_prod_base.columns:
+                df_prod_base["product_name"] = df_prod_base["category"] + "商品"
+            else:
+                df_prod_base["product_name"] = "精选商品"
+
+        # 2. 兼容商品ID字段 (product_id / goods_id)
+        if "product_id" not in df_prod_base.columns:
+            if "goods_id" in df_prod_base.columns:
+                df_prod_base["product_id"] = df_prod_base["goods_id"]
+            else:
+                df_prod_base["product_id"] = df_prod_base["order_id"].astype(str) + "_P"
+
+        # 3. 兼容品牌字段
+        if "brand" not in df_prod_base.columns:
+            df_prod_base["brand"] = "品牌"
+
+        # 4. 兼容品类字段
+        if "category" not in df_prod_base.columns:
+            df_prod_base["category"] = "通用品类"
+
+        # ---------------- 构造商品唯一标识 ----------------
         df_prod_base["global_product_id"] = (
             "P-"
             + df_prod_base["platform"].str.upper()
@@ -607,16 +627,15 @@ with tab4:
             + df_prod_base["product_id"].astype(str)
         )
 
-        # 商品展示标签
         df_prod_base["product_label"] = (
-            df_prod_base["product_name"]
+            df_prod_base["product_name"].astype(str)
             + " | "
             + df_prod_base["platform"]
             + " | "
             + df_prod_base["global_product_id"]
         )
 
-        # 下拉框选项（按销售额倒序排列，优先展示热销品）
+        # 下拉框选项（按销售额倒序）
         prod_rank = (
             df_prod_base.groupby("product_label")["total_amount"]
             .sum()
@@ -627,7 +646,7 @@ with tab4:
 
         selected_prod_label = st.selectbox("选择商品", prod_options)
 
-        # 2. 时间粒度选择
+        # 时间粒度选择
         time_granularity = st.radio(
             "时间粒度",
             ["按日", "按月", "按季度"],
@@ -635,12 +654,12 @@ with tab4:
             key="prod_granularity",
         )
 
-        # 过滤所选商品数据
+        # 过滤选定商品
         df_single = df_prod_base[
             df_prod_base["product_label"] == selected_prod_label
         ]
 
-        # 计算单品核心指标
+        # 计算指标
         single_gmv = df_single["total_amount"].sum()
         single_sales = (
             df_single["quantity"].sum()
@@ -652,14 +671,14 @@ with tab4:
             single_gmv / single_sales if single_sales > 0 else 0
         )
 
-        # 3. 展现单品 KPI 4大指标卡
+        # 指标卡
         pk1, pk2, pk3, pk4 = st.columns(4)
         pk1.metric("商品销售额", f"¥{single_gmv:,.2f}")
         pk2.metric("商品销量", f"{single_sales:,}")
         pk3.metric("商品订单数", f"{single_orders:,}")
         pk4.metric("平均成交单价", f"¥{single_avg_price:,.2f}")
 
-        # 4. 单品趋势图（动态粒度 + 双 Y 轴）
+        # 单品趋势图
         if time_granularity == "按日":
             group_col = "order_date"
         elif time_granularity == "按月":
@@ -683,7 +702,6 @@ with tab4:
         st.markdown(f"**{selected_prod_label} 销售趋势**")
 
         fig_single = go.Figure()
-        # 销量（柱状图，副 Y 轴）
         fig_single.add_trace(
             go.Bar(
                 x=df_single_trend[group_col],
@@ -694,7 +712,6 @@ with tab4:
                 opacity=0.6,
             )
         )
-        # 销售额（折线图，主 Y 轴）
         fig_single.add_trace(
             go.Scatter(
                 x=df_single_trend[group_col],
@@ -718,7 +735,7 @@ with tab4:
 
         st.markdown("---")
 
-        # 5. 品类与商品排行（两列布局）
+        # 排行榜
         st.subheader("品类与商品排行")
         col_cat, col_top = st.columns(2)
 
@@ -772,7 +789,7 @@ with tab4:
             fig_top15.update_layout(height=380, legend=dict(title="platform"))
             st.plotly_chart(fig_top15, use_container_width=True)
 
-        # 6. 分析解读模块
+        # 分析解读
         st.subheader("分析解读")
         selected_name = df_single.iloc[0]["product_name"]
         top_cat_name = df_cat_sales.iloc[0]["category"]
@@ -795,7 +812,7 @@ with tab4:
             f"当前销售额最高的品类为“**{top_cat_name}**”，贡献 **¥{top_cat_gmv:,.2f}**。"
         )
 
-        # 7. 商品汇总明细表格
+        # 表格展示
         df_prod_table = (
             df_prod_base.groupby(
                 [
@@ -819,7 +836,6 @@ with tab4:
             .sort_values("销售额", ascending=False)
         )
 
-        # 格式化数值展示
         df_prod_table_show = df_prod_table.copy()
         df_prod_table_show["销售额"] = df_prod_table_show["销售额"].round(2)
 
@@ -829,7 +845,7 @@ with tab4:
             hide_index=True,
         )
 
-        # 8. 下载完整商品分析结果 CSV 按钮
+        # 下载 CSV 按钮
         prod_csv = df_prod_table.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             label="下载完整商品分析结果",
@@ -838,7 +854,6 @@ with tab4:
             mime="text/csv",
             type="primary",
         )
-
 # ==================== Tab 5: 地域分析 ====================
 with tab5:
     st.subheader("地域销售分析")
