@@ -1092,17 +1092,68 @@ with tab5:
         )
 
         # ---------------- 5. 地域分布与省份排名 ----------------
-        col_map, col_prov_rank = st.columns(2)
-
-        with col_map:
+with col_map:
             st.markdown(f"**{geo_mode}销售分布**")
+
+            # 1. 常见城市经纬度字典映射
+            city_geo_coords = {
+                "北京": {"lat": 39.9042, "lon": 116.4074},
+                "上海": {"lat": 31.2304, "lon": 121.4737},
+                "广州": {"lat": 23.1291, "lon": 113.2644},
+                "深圳": {"lat": 22.5431, "lon": 114.0579},
+                "南京": {"lat": 32.0603, "lon": 118.7969},
+                "杭州": {"lat": 30.2741, "lon": 120.1551},
+                "西安": {"lat": 34.3416, "lon": 108.9398},
+                "成都": {"lat": 30.5728, "lon": 104.0668},
+                "重庆": {"lat": 29.5630, "lon": 106.5516},
+                "武汉": {"lat": 30.5928, "lon": 114.3055},
+                "苏州": {"lat": 31.2989, "lon": 120.5853},
+                "天津": {"lat": 39.0842, "lon": 117.2009},
+                "长沙": {"lat": 28.2282, "lon": 112.9388},
+                "青岛": {"lat": 36.0671, "lon": 120.3826},
+                "郑州": {"lat": 34.7466, "lon": 113.6253}
+            }
+
+            # 2. 聚合城市数据并匹配经纬度
             df_city_map = df_geo_base.groupby(city_col)["total_amount"].sum().reset_index()
-            # 简易分布气泡图
-            fig_map = px.scatter(
-                df_city_map, x=city_col, y="total_amount", size="total_amount", color="total_amount",
-                color_continuous_scale="Blues", labels={"total_amount": "GMV", city_col: "城市"}
+            df_city_map["lat"] = df_city_map[city_col].apply(lambda c: city_geo_coords.get(c, {}).get("lat", 35.0))
+            df_city_map["lon"] = df_city_map[city_col].apply(lambda c: city_geo_coords.get(c, {}).get("lon", 105.0))
+
+            # 3. 构建 Plotly 气泡地图 (scatter_geo)
+            fig_map = px.scatter_geo(
+                df_city_map,
+                lat="lat",
+                lon="lon",
+                size="total_amount",
+                color="total_amount",
+                hover_name=city_col,
+                hover_data={"total_amount": ":,.2f", "lat": False, "lon": False},
+                color_continuous_scale="Blues",
+                size_max=25,
+                labels={"total_amount": "GMV", city_col: "城市"}
             )
-            fig_map.update_layout(height=350, plot_bgcolor="white", showlegend=False)
+
+            # 4. 配置地图视角聚焦于中国区域
+            fig_map.update_geos(
+                scope="asia",
+                center=dict(lat=35.5, lon=104.5),
+                projection_scale=3.8,
+                showcountries=True,
+                countrycolor="#cbd5e1",
+                showcoastlines=True,
+                coastlinecolor="#cbd5e1",
+                showland=True,
+                landcolor="#f8fafc",
+                fitbounds=False
+            )
+
+            fig_map.update_layout(
+                height=350,
+                margin=dict(l=0, r=0, t=10, b=0),
+                plot_bgcolor="white",
+                coloraxis_showscale=False
+            )
+
             st.plotly_chart(fig_map, use_container_width=True)
 
         with col_prov_rank:
