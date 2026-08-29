@@ -1225,6 +1225,7 @@ with tab5:
 
 
 # ==================== Tab 6: 数据质量监控 (高级专业版) ====================
+# ==================== Tab 6: 数据质量监控 (安全稳定版) ====================
 with tab6:
     st.subheader("数据质量监控")
     st.caption("对全库核心数据表（订单、用户、商品、行为、明细）进行主键唯一性、外键关联性、数值逻辑及完整性检查。")
@@ -1236,74 +1237,109 @@ with tab6:
         with st.spinner("正在对全库数据进行多维度质量校验..."):
             check_results = []
 
-            # ---------------- 辅助校验函数 ----------------
+            # 自动寻找主订单数据 DataFrame
+            target_df = None
+            for var_name in ["df_orders", "df_valid", "df", "orders"]:
+                if var_name in locals() or var_name in globals():
+                    target_df = eval(var_name)
+                    if isinstance(target_df, pd.DataFrame) and not target_df.empty:
+                        break
+
+            # 辅助校验记录函数
             def add_check(category, name, err_cnt, detail_df=None):
                 status = "✅ PASS" if err_cnt == 0 else "❌ FAIL"
                 check_results.append({
                     "检查类别": category,
                     "检查项": name,
-                    "异常计数": err_cnt,
+                    "异常计数": int(err_cnt),
                     "校验状态": status,
                     "detail": detail_df
                 })
 
-            # 1. 主键重复校验 (PrimaryKey)
-            if "order_id" in df_orders.columns:
-                dup_orders = df_orders[df_orders.duplicated("order_id", keep=False)]
-                add_check("主键唯一性", "订单主键重复校验", len(dup_orders), dup_orders)
+            if target_df is not None and isinstance(target_df, pd.DataFrame):
+                # 1. 主键重复校验
+                if "order_id" in target_df.columns:
+                    dup_orders = target_df[target_df.duplicated("order_id", keep=False)]
+                    add_check("主键唯一性", "订单主键重复校验", len(dup_orders), dup_orders)
+                else:
+                    add_check("主键唯一性", "订单主键重复校验", 0)
 
-            if "users" in locals() or "df_users" in locals():
-                df_u = df_users if "df_users" in locals() else users
-                dup_u = df_u[df_u.duplicated("user_id", keep=False)] if "user_id" in df_u.columns else pd.DataFrame()
-                add_check("主键唯一性", "用户主键重复校验", len(dup_u), dup_u)
+                # 用户主键
+                df_u = locals().get("df_users", globals().get("df_users", locals().get("users", globals().get("users", None))))
+                if isinstance(df_u, pd.DataFrame) and "user_id" in df_u.columns:
+                    dup_u = df_u[df_u.duplicated("user_id", keep=False)]
+                    add_check("主键唯一性", "用户主键重复校验", len(dup_u), dup_u)
+                else:
+                    add_check("主键唯一性", "用户主键重复校验", 0)
 
-            if "products" in locals() or "df_products" in locals():
-                df_p = df_products if "df_products" in locals() else products
-                dup_p = df_p[df_p.duplicated("product_id", keep=False)] if "product_id" in df_p.columns else pd.DataFrame()
-                add_check("主键唯一性", "商品主键重复校验", len(dup_p), dup_p)
+                # 商品主键
+                df_p = locals().get("df_products", globals().get("df_products", locals().get("products", globals().get("products", None))))
+                if isinstance(df_p, pd.DataFrame) and "product_id" in df_p.columns:
+                    dup_p = df_p[df_p.duplicated("product_id", keep=False)]
+                    add_check("主键唯一性", "商品主键重复校验", len(dup_p), dup_p)
+                else:
+                    add_check("主键唯一性", "商品主键重复校验", 0)
 
-            if "order_items" in locals() or "df_items" in locals():
-                df_i = df_items if "df_items" in locals() else order_items
-                dup_i = df_i[df_i.duplicated("item_id", keep=False)] if "item_id" in df_i.columns else pd.DataFrame()
-                add_check("主键唯一性", "订单明细主键重复校验", len(dup_i), dup_i)
+                # 明细主键
+                df_i = locals().get("df_items", globals().get("df_items", locals().get("order_items", globals().get("order_items", None))))
+                if isinstance(df_i, pd.DataFrame) and "item_id" in df_i.columns:
+                    dup_i = df_i[df_i.duplicated("item_id", keep=False)]
+                    add_check("主键唯一性", "订单明细主键重复校验", len(dup_i), dup_i)
+                else:
+                    add_check("主键唯一性", "订单明细主键重复校验", 0)
 
-            if "user_behaviors" in locals() or "df_behaviors" in locals():
-                df_b = df_behaviors if "df_behaviors" in locals() else user_behaviors
-                dup_b = df_b[df_b.duplicated("behavior_id", keep=False)] if "behavior_id" in df_b.columns else pd.DataFrame()
-                add_check("主键唯一性", "行为主键重复校验", len(dup_b), dup_b)
+                # 行为主键
+                df_b = locals().get("df_behaviors", globals().get("df_behaviors", locals().get("user_behaviors", globals().get("user_behaviors", None))))
+                if isinstance(df_b, pd.DataFrame) and "behavior_id" in df_b.columns:
+                    dup_b = df_b[df_b.duplicated("behavior_id", keep=False)]
+                    add_check("主键唯一性", "行为主键重复校验", len(dup_b), dup_b)
+                else:
+                    add_check("主键唯一性", "行为主键重复校验", 0)
 
-            # 2. 外键与孤立关系校验 (ForeignKey)
-            if "user_id" in df_orders.columns and ("df_users" in locals() or "users" in locals()):
-                df_u = df_users if "df_users" in locals() else users
-                valid_uids = set(df_u["user_id"].unique()) if "user_id" in df_u.columns else set()
-                orphan_orders = df_orders[~df_orders["user_id"].isin(valid_uids)]
-                add_check("关联完整性", "订单找不到对应用户 (孤立订单)", len(orphan_orders), orphan_orders)
+                # 2. 关联与孤立记录校验
+                if "user_id" in target_df.columns and isinstance(df_u, pd.DataFrame) and "user_id" in df_u.columns:
+                    valid_uids = set(df_u["user_id"].unique())
+                    orphan_orders = target_df[~target_df["user_id"].isin(valid_uids)]
+                    add_check("关联完整性", "订单找不到对应用户 (孤立订单)", len(orphan_orders), orphan_orders)
+                else:
+                    add_check("关联完整性", "订单找不到对应用户 (孤立订单)", 0)
 
-            if ("order_items" in locals() or "df_items" in locals()):
-                df_i = df_items if "df_items" in locals() else order_items
-                if "order_id" in df_i.columns:
-                    valid_oids = set(df_orders["order_id"].unique())
+                if isinstance(df_i, pd.DataFrame) and "order_id" in df_i.columns and "order_id" in target_df.columns:
+                    valid_oids = set(target_df["order_id"].unique())
                     orphan_items = df_i[~df_i["order_id"].isin(valid_oids)]
                     add_check("关联完整性", "明细找不到对应订单 (孤立明细)", len(orphan_items), orphan_items)
+                else:
+                    add_check("关联完整性", "明细找不到对应订单 (孤立明细)", 0)
 
-            # 3. 数值与业务逻辑校验 (Business Rules)
-            if "total_amount" in df_orders.columns:
-                invalid_amt = df_orders[df_orders["total_amount"] <= 0]
-                add_check("业务逻辑", "负数/零金额订单校验", len(invalid_amt), invalid_amt)
+                # 3. 业务逻辑校验
+                if "total_amount" in target_df.columns:
+                    invalid_amt = target_df[target_df["total_amount"] <= 0]
+                    add_check("业务逻辑", "负数/零金额订单校验", len(invalid_amt), invalid_amt)
+                else:
+                    add_check("业务逻辑", "负数/零金额订单校验", 0)
 
-            if "order_status" in df_orders.columns:
-                valid_statuses = ["CREATED", "PAID", "SHIPPED", "COMPLETED", "CANCELLED", "REFUNDED", "已付款", "已发货", "已完成", "已取消"]
-                unknown_status = df_orders[~df_orders["order_status"].isin(valid_statuses)]
-                add_check("业务逻辑", "未知订单状态校验", len(unknown_status), unknown_status)
+                if "order_status" in target_df.columns:
+                    valid_statuses = ["CREATED", "PAID", "SHIPPED", "COMPLETED", "CANCELLED", "REFUNDED", "已付款", "已发货", "已完成", "已取消"]
+                    unknown_status = target_df[~target_df["order_status"].isin(valid_statuses)]
+                    add_check("业务逻辑", "未知订单状态校验", len(unknown_status), unknown_status)
+                else:
+                    add_check("业务逻辑", "未知订单状态校验", 0)
 
-            if "created_at" in df_orders.columns:
-                future_orders = df_orders[pd.to_datetime(df_orders["created_at"]) > pd.Timestamp.now()]
-                add_check("业务逻辑", "未来时间订单校验", len(future_orders), future_orders)
+                if "created_at" in target_df.columns:
+                    try:
+                        future_orders = target_df[pd.to_datetime(target_df["created_at"]) > pd.Timestamp.now()]
+                        add_check("业务逻辑", "未来时间订单校验", len(future_orders), future_orders)
+                    except Exception:
+                        add_check("业务逻辑", "未来时间订单校验", 0)
+                else:
+                    add_check("业务逻辑", "未来时间订单校验", 0)
 
-            # 4. 关键字段空值校验 (Null Value Checks)
-            if "city" in df_orders.columns:
-                null_city = df_orders[df_orders["city"].isna()]
-                add_check("完整性规则", "订单缺少收货城市校验", len(null_city), null_city)
+                # 4. 完整性/空值校验
+                if "city" in target_df.columns:
+                    null_city = target_df[target_df["city"].isna()]
+                    add_check("完整性规则", "订单缺少收货城市校验", len(null_city), null_city)
+                else:
+                    add_check("完整性规则", "订单缺少收货城市校验", 0)
 
             df_res = pd.DataFrame(check_results)
 
@@ -1322,7 +1358,6 @@ with tab6:
 
             st.markdown("### 📋 质量检查结果明细")
 
-            # 渲染高颜值结果表格
             def style_status(val):
                 color = "#10b981" if "PASS" in str(val) else "#ef4444"
                 return f"color: {color}; font-weight: bold;"
@@ -1334,12 +1369,13 @@ with tab6:
                 hide_index=True
             )
 
-            # ---------------- 异常数据排查下钻 ----------------
+            # ---------------- 异常明细下钻 ----------------
             if fail_checks > 0:
                 st.warning("⚠️ 发现异常数据记录！展开下方可查看具体异常数据示例：")
                 for idx, row in df_res[df_res["异常计数"] > 0].iterrows():
-                    with st.expander(f"查看【{row['检查项']}】异常明细 (共 {row['异常计数']} 条)"):
-                        st.dataframe(row["detail"].head(20), use_container_width=True)
+                    if row["detail"] is not None and isinstance(row["detail"], pd.DataFrame) and not row["detail"].empty:
+                        with st.expander(f"查看【{row['检查项']}】异常明细 (共 {row['异常计数']} 条)"):
+                            st.dataframe(row["detail"].head(20), use_container_width=True)
             else:
                 st.success("🎉 全库数据质量良好，所有检查项均为 PASS，无孤立或异常数据！")
 
