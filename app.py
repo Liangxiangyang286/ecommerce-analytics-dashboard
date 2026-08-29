@@ -1,161 +1,421 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
 import sqlite3
+import datetime
+import numpy as np
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import streamlit as st
 
-st.set_page_config(page_title="多平台电商经营分析看板", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="多平台电商经营分析看板",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# 自定义专业 CSS 样式
-st.markdown("""
-    <style>
-    .metric-card {
-        background-color: #f8f9fa;
-        border-radius: 8px;
-        padding: 15px;
-        border-left: 5px solid #1E88E5;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    </style>
-""", unsafe_allow_html=True)
+st.title("多平台电商经营分析")
+st.caption(
+    "有效订单口径：已付款、已发货、已完成； GMV 使用订单主表 total_amount。"
+)
 
-st.title("📊 多平台电商经营对比分析看板")
-st.caption("覆盖 拼多多 / 京东 / 抖音 三大平台全链路经营数据（数据已实时聚合）")
 
 def run_sql(query, params=()):
     with sqlite3.connect("ecommerce.db") as conn:
         return pd.read_sql_query(query, conn, params=params)
 
-# ---------------- 侧边栏筛选 ----------------
-st.sidebar.header("🔍 全局维度筛选")
-selected_platforms = st.sidebar.multiselect(
-    "分析平台", ["pinduoduo", "jd", "douyin"], default=["pinduoduo", "jd", "douyin"]
+
+# ---------------- 侧边栏全局筛选 ----------------
+st.sidebar.header("筛选条件")
+
+# 日期范围选择器
+min_date = datetime.date(2025, 1, 1)
+max_date = datetime.date(2026, 12, 31)
+date_range = st.sidebar.date_input(
+    "日期范围",
+    value=(min_date, max_date),
+    min_value=min_date,
+    max_value=max_date,
 )
-plat_str = "','".join(selected_platforms) if selected_platforms else "none"
 
-time_grain = st.sidebar.radio("趋势汇聚粒度", ["按月 (Monthly)", "按周 (Weekly)", "按日 (Daily)"])
+if isinstance(date_range, tuple) and len(date_range) == 2:
+    start_d, end_d = date_range
+else:
+    start_d, end_d = min_date, max_date
 
-# ---------------- 核心数据加载 ----------------
+# 平台多选器
+selected_platforms = st.sidebar.multiselect(
+    "平台",
+    ["pinduoduo", "jd", "douyin"],
+    default=["pinduoduo", "jd", "douyin"],
+)
+plat_str = (
+    "','".join(selected_platforms) if selected_platforms else "no_platform"
+)
+
+# ---------------- 加载数据 ----------------
 sql_main = f"""
-    SELECT *, strftime('%Y-%m', created_at) as year_month, strftime('%Y-%W', created_at) as year_week, date(created_at) as order_date
+    SELECT *, 
+           date(created_at) as order_date,
+           strftime('%Y-%m', created_at) as year_month,
+           strftime('%Y-Q', created_at) || CASE 
+               WHEN strftime('%m', created_at) IN ('01','02','03') THEN '1'
+               WHEN strftime('%m', created_at) IN ('04','05','06') THEN '2'
+               WHEN strftime('%m', created_at) IN ('07','08','09') THEN '3'
+               ELSE '4' END as year_quarter
     FROM orders 
     WHERE platform IN ('{plat_str}')
+      AND date(created_at) >= '{start_d}'
+      AND date(created_at) <= '{end_d}'
 """
 df_all = run_sql(sql_main)
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📈 经营总览", "🌪️ 转化漏斗", "👤 用户 RFM", "📦 商品品类", "🗺️ 地域销售", "🛡️ 数据质量"
-])
+# 6大分析 Tab 栏
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    [
+        "经营总览",
+        "转化漏斗",
+        "用户 RFM",
+        "商品分析",
+        "地域分析",
+        "数据质量",
+    ]
+)
 
-# ---------------- Tab 1: 经营总览 ----------------
+# ==================== Tab 1: 经营总览 ====================
 with tab1:
     if df_all.empty:
-        st.warning("请在侧边栏至少选择一个平台！")
+        st.warning("⚠️ 当前筛选条件下暂无订单数据，请重新选择平台或日期范围。")
     else:
-        df_valid = df_all[df_all['order_status'].isin(['已付款', '已发货', '已完成'])]
-        
-        # 顶部 KPI 指标卡 (5列响应式)
-        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
-        total_gmv = df_valid['total_amount'].sum()
-        total_orders = len(df_valid)
-        total_users = df_valid['user_id'].nunique()
-        aov = total_gmv / total_orders if total_orders > 0 else 0
-        refund_rate = (len(df_all[df_all['order_status'] == '已退款']) / len(df_all) * 100) if len(df_all) > 0 else 0
-        
-        kpi1.metric("总成交额 (GMV)", f"¥{total_gmv:,.2f}", delta="12.5% 较上周期")
-        kpi2.metric("有效订单量", f"{total_orders:,} 单", delta="8.3%")
-        kpi3.metric("下单独立用户数", f"{total_users:,} 人")
-        kpi4.metric("平均客单价 (AOV)", f"¥{aov:.2f}")
-        kpi5.metric("全盘退货率", f"{refund_rate:.1f}%", delta="-0.8%", delta_color="inverse")
-        
-        st.markdown("---")
-        
-        # 趋势图 + 平台结构对比
-        col_chart1, col_chart2 = st.columns([2, 1])
-        
-        with col_chart1:
-            st.subheader("🗓️ 核心经营趋势 (平滑聚合视角)")
-            grain_map = {"按月 (Monthly)": "year_month", "按周 (Weekly)": "year_week", "按日 (Daily)": "order_date"}
-            group_col = grain_map[time_grain]
-            
-            df_trend = df_valid.groupby([group_col, 'platform'])['total_amount'].sum().reset_index()
-            fig_trend = px.line(
-                df_trend, x=group_col, y='total_amount', color='platform',
-                title=f"各平台 GMV 变化趋势 ({time_grain})", markers=True,
-                labels={"total_amount": "GMV (元)", group_col: "时间维度"}
-            )
-            fig_trend.update_layout(hovermode="x unified", legend=dict(orientation="h", y=1.1))
-            st.plotly_chart(fig_trend, use_container_width=True)
-            
-        with col_chart2:
-            st.subheader("⚖️ 三大平台数据占比")
-            df_plat_summary = df_valid.groupby('platform').agg(
-                GMV=('total_amount', 'sum'),
-                客单价=('total_amount', 'mean')
-            ).reset_index()
-            
-            fig_donut = px.pie(
-                df_plat_summary, values='GMV', names='platform', hole=0.45,
-                title="各平台 GMV 贡献占比"
-            )
-            st.plotly_chart(fig_donut, use_container_width=True)
-            
-        # 深度商业洞察模块
-        st.info("""
-        📌 **商业洞察与分析结论**：
-        1. **客单价分化明显**：京东（JD）在数码与高价品类驱动下客单价领先；拼多多（Pinduoduo）具备极高订单频次与高走量属性。
-        2. **时间趋势表现**：在月度视角下，各平台在促销节点（如双11、618）呈现明显峰值，趋势平滑度优于单日日频数据。
-        """)
+        # 有效订单过滤
+        df_valid = df_all[
+            df_all["order_status"].isin(["已付款", "已发货", "已完成"])
+        ]
 
-# ---------------- Tab 2: 转化漏斗 ----------------
+        # 1. 顶部全盘大盘指标
+        total_gmv = df_valid["total_amount"].sum()
+        total_orders = len(df_valid)
+        total_users = df_valid["user_id"].nunique()
+        aov = total_gmv / total_orders if total_orders > 0 else 0
+        valid_order_ratio = (
+            (total_orders / len(df_all) * 100) if len(df_all) > 0 else 0
+        )
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("GMV", f"¥{total_gmv:,.2f}")
+        c2.metric("有效订单", f"{total_orders:,}")
+        c3.metric("购买用户", f"{total_users:,}")
+        c4.metric("客单价", f"¥{aov:,.2f}")
+        c5.metric("有效订单占比", f"{valid_order_ratio:.1f}%")
+
+        st.markdown("---")
+
+        # 2. 单日 GMV 查询板块
+        st.subheader("单日 GMV 查询")
+
+        # 获取数据集中存在的日期供选取
+        available_dates = pd.to_datetime(df_all["order_date"]).dt.date.unique()
+        available_dates.sort()
+        default_single_date = (
+            end_d
+            if end_d in available_dates
+            else available_dates[-1]
+            if len(available_dates) > 0
+            else end_d
+        )
+
+        selected_single_date = st.date_input(
+            "选择日期",
+            value=default_single_date,
+            min_value=min_date,
+            max_value=max_date,
+            key="single_date_picker",
+        )
+
+        # 单日指标计算
+        target_date_str = str(selected_single_date)
+        prev_date_str = str(
+            selected_single_date - datetime.timedelta(days=1)
+        )
+
+        df_day = df_valid[df_valid["order_date"] == target_date_str]
+        df_prev_day = df_valid[df_valid["order_date"] == prev_date_str]
+
+        day_gmv = df_day["total_amount"].sum()
+        prev_day_gmv = df_prev_day["total_amount"].sum()
+
+        if prev_day_gmv > 0:
+            day_gmv_growth = ((day_gmv - prev_day_gmv) / prev_day_gmv) * 100
+            delta_str = f"{day_gmv_growth:+.1f}% 较前一日"
+        else:
+            delta_str = "无前一日对比"
+
+        day_orders = len(df_day)
+        day_users = df_day["user_id"].nunique()
+        day_aov = day_gmv / day_orders if day_orders > 0 else 0
+
+        dc1, dc2, dc3, dc4 = st.columns(4)
+        dc1.metric("当日 GMV", f"¥{day_gmv:,.2f}", delta=delta_str)
+        dc2.metric("当日有效订单", f"{day_orders:,}")
+        dc3.metric("当日购买用户", f"{day_users:,}")
+        dc4.metric("当日客单价", f"¥{day_aov:,.2f}")
+
+        st.markdown("---")
+
+        # 3. 每日 GMV 趋势 (按日)
+        st.subheader("每日 GMV 趋势（可悬停查看具体日期）")
+        df_daily = (
+            df_valid.groupby("order_date")["total_amount"].sum().reset_index()
+        )
+        fig_daily = px.line(
+            df_daily,
+            x="order_date",
+            y="total_amount",
+            labels={"order_date": "order_time", "total_amount": "GMV"},
+        )
+        fig_daily.update_traces(
+            mode="lines+markers", marker=dict(size=4), line=dict(width=1.5)
+        )
+        fig_daily.update_layout(hovermode="x unified", height=380)
+        st.plotly_chart(fig_daily, use_container_width=True)
+
+        st.markdown("---")
+
+        # 4. 月度与季度 GMV 多粒度并排展现
+        st.subheader("月度与季度 GMV")
+        col_m, col_q = st.columns(2)
+
+        with col_m:
+            st.markdown("**月度日均 GMV 与环比趋势**")
+            df_month = (
+                df_valid.groupby("year_month")
+                .agg(
+                    total_gmv=("total_amount", "sum"),
+                    days=("order_date", "nunique"),
+                )
+                .reset_index()
+            )
+            df_month["daily_avg_gmv"] = (
+                df_month["total_gmv"] / df_month["days"]
+            )
+            df_month["mom_growth"] = (
+                df_month["daily_avg_gmv"].pct_change() * 100
+            )
+
+            fig_month = go.Figure()
+            fig_month.add_trace(
+                go.Bar(
+                    x=df_month["year_month"],
+                    y=df_month["mom_growth"],
+                    name="环比变化率",
+                    yaxis="y2",
+                    opacity=0.4,
+                )
+            )
+            fig_month.add_trace(
+                go.Scatter(
+                    x=df_month["year_month"],
+                    y=df_month["daily_avg_gmv"],
+                    name="日均 GMV",
+                    mode="lines+markers",
+                    line=dict(width=3),
+                )
+            )
+            fig_month.update_layout(
+                yaxis=dict(title="日均 GMV (元)"),
+                yaxis2=dict(
+                    title="环比变化率 (%)", overlaying="y", side="right"
+                ),
+                legend=dict(orientation="h", y=1.15),
+                height=350,
+            )
+            st.plotly_chart(fig_month, use_container_width=True)
+
+        with col_q:
+            st.markdown("**季度日均 GMV 与环比趋势**")
+            df_quarter = (
+                df_valid.groupby("year_quarter")
+                .agg(
+                    total_gmv=("total_amount", "sum"),
+                    days=("order_date", "nunique"),
+                )
+                .reset_index()
+            )
+            df_quarter["daily_avg_gmv"] = (
+                df_quarter["total_gmv"] / df_quarter["days"]
+            )
+            df_quarter["qoq_growth"] = (
+                df_quarter["daily_avg_gmv"].pct_change() * 100
+            )
+
+            fig_quarter = go.Figure()
+            fig_quarter.add_trace(
+                go.Bar(
+                    x=df_quarter["year_quarter"],
+                    y=df_quarter["qoq_growth"],
+                    name="环比变化率",
+                    yaxis="y2",
+                    opacity=0.4,
+                )
+            )
+            fig_quarter.add_trace(
+                go.Scatter(
+                    x=df_quarter["year_quarter"],
+                    y=df_quarter["daily_avg_gmv"],
+                    name="日均 GMV",
+                    mode="lines+markers",
+                    line=dict(width=3),
+                )
+            )
+            fig_quarter.update_layout(
+                yaxis=dict(title="日均 GMV (元)"),
+                yaxis2=dict(
+                    title="环比变化率 (%)", overlaying="y", side="right"
+                ),
+                legend=dict(orientation="h", y=1.15),
+                height=350,
+            )
+            st.plotly_chart(fig_quarter, use_container_width=True)
+
+        st.markdown("---")
+
+        # 5. 平台对比与订单状态分布
+        col_p, col_s = st.columns(2)
+        with col_p:
+            st.markdown("**平台 GMV**")
+            df_plat = (
+                df_valid.groupby("platform")["total_amount"]
+                .sum()
+                .reset_index()
+            )
+            fig_plat = px.bar(
+                df_plat,
+                x="platform",
+                y="total_amount",
+                color="platform",
+                labels={"total_amount": "GMV"},
+            )
+            st.plotly_chart(fig_plat, use_container_width=True)
+
+        with col_s:
+            st.markdown("**订单状态分布**")
+            df_status = df_all.groupby("order_status").size().reset_index(name="count")
+            fig_status = px.pie(
+                df_status, values="count", names="order_status", hole=0.4
+            )
+            st.plotly_chart(fig_status, use_container_width=True)
+
+        # 6. 分析解读自动生成模块
+        st.subheader("分析解读")
+        top_plat = (
+            df_plat.sort_values("total_amount", ascending=False).iloc[0][
+                "platform"
+            ]
+            if not df_plat.empty
+            else "N/A"
+        )
+        top_plat_ratio = (
+            (
+                df_plat.sort_values("total_amount", ascending=False).iloc[0][
+                    "total_amount"
+                ]
+                / total_gmv
+                * 100
+            )
+            if not df_plat.empty
+            else 0
+        )
+        last_month = df_month.iloc[-1]["year_month"] if not df_month.empty else "N/A"
+        last_month_avg = (
+            df_month.iloc[-1]["daily_avg_gmv"] if not df_month.empty else 0
+        )
+        last_month_mom = (
+            df_month.iloc[-1]["mom_growth"] if not df_month.empty else 0
+        )
+
+        st.info(
+            f"筛选期内共实现GMV ¥{total_gmv:,.2f}，有效订单{total_orders:,}笔，"
+            f"客单价¥{aov:,.2f}。GMV贡献最高的平台为 **{top_plat}**，占比 **{top_plat_ratio:.1f}%**。"
+            f"最近月份（{last_month}）日均 GMV 为 ¥{last_month_avg:,.2f}，较上一月变化 **{last_month_mom:+.1f}%**。"
+        )
+
+# ==================== Tab 2: 转化漏斗 ====================
 with tab2:
-    st.subheader("🌪️ 全链路电商用户转化漏斗")
-    funnel_df = pd.DataFrame({
-        "环节": ["1. 首页/推荐浏览", "2. 商品详情页点击", "3. 加入购物车", "4. 提交订单", "5. 成功支付"],
-        "转化人数": [250000, 110000, 48000, 22000, total_orders]
-    })
-    fig_funnel = px.funnel(funnel_df, x='转化人数', y='环节', title="全站整体用户转化漏斗模型")
+    st.subheader("全链路转化漏斗")
+    funnel_df = pd.DataFrame(
+        {
+            "环节": [
+                "1. 首页/推荐浏览",
+                "2. 商品详情页点击",
+                "3. 加入购物车",
+                "4. 提交订单",
+                "5. 成功支付",
+            ],
+            "转化人数": [250000, 110000, 48000, 22000, total_orders if 'total_orders' in locals() else 10000],
+        }
+    )
+    fig_funnel = px.funnel(funnel_df, x="转化人数", y="环节")
     st.plotly_chart(fig_funnel, use_container_width=True)
 
-# ---------------- Tab 3: 用户 RFM ----------------
+# ==================== Tab 3: 用户 RFM ====================
 with tab3:
-    st.subheader("👤 用户价值 RFM 分群矩阵")
-    rfm_df = pd.DataFrame({
-        "RFM分群": ["高价值核心客户", "高潜力发展客户", "重点挽留客户", "一般流失客户"],
-        "用户规模": [1250, 2400, 1800, 950],
-        "客单价贡献": [850, 420, 210, 95],
-        "复购频次": [5.2, 3.1, 1.8, 1.1]
-    })
+    st.subheader("用户价值 RFM 分群")
+    rfm_df = pd.DataFrame(
+        {
+            "RFM分群": [
+                "高价值核心客户",
+                "高潜力发展客户",
+                "重点挽留客户",
+                "一般流失客户",
+            ],
+            "用户规模": [1250, 2400, 1800, 950],
+            "客单价贡献": [850, 420, 210, 95],
+            "复购频次": [5.2, 3.1, 1.8, 1.1],
+        }
+    )
     fig_rfm = px.scatter(
-        rfm_df, x='用户规模', y='客单价贡献', size='复购频次', color='RFM分群',
-        text='RFM分群', title="用户价值气泡图 (气泡大小表示复购频次)"
+        rfm_df,
+        x="用户规模",
+        y="客单价贡献",
+        size="复购频次",
+        color="RFM分群",
+        text="RFM分群",
     )
     st.plotly_chart(fig_rfm, use_container_width=True)
 
-# ---------------- Tab 4: 商品品类 ----------------
+# ==================== Tab 4: 商品分析 ====================
 with tab4:
-    st.subheader("📦 跨平台品类交叉分析")
+    st.subheader("商品与品类分析")
     if not df_all.empty:
-        df_cat = df_valid.groupby(['category', 'platform'])['total_amount'].sum().reset_index()
+        df_cat = (
+            df_all[df_all["order_status"].isin(["已付款", "已发货", "已完成"])]
+            .groupby(["category", "platform"])["total_amount"]
+            .sum()
+            .reset_index()
+        )
         fig_cat = px.bar(
-            df_cat, x='category', y='total_amount', color='platform', barmode='group',
-            title="各平台不同品类销售额 (GMV) 对比", labels={"total_amount": "GMV (元)", "category": "商品品类"}
+            df_cat, x="category", y="total_amount", color="platform", barmode="group"
         )
         st.plotly_chart(fig_cat, use_container_width=True)
 
-# ---------------- Tab 5: 地域销售 ----------------
+# ==================== Tab 5: 地域分析 ====================
 with tab5:
-    st.subheader("🗺️ 城市 GMV 贡献 Top 10")
+    st.subheader("地域销售分析")
     if not df_all.empty:
-        df_geo = df_valid.groupby('receiver_city')['total_amount'].sum().reset_index().sort_values('total_amount', ascending=False)
-        fig_geo = px.bar(df_geo, x='receiver_city', y='total_amount', color='total_amount', title="收货城市销售额排名")
+        df_geo = (
+            df_all[df_all["order_status"].isin(["已付款", "已发货", "已完成"])]
+            .groupby("receiver_city")["total_amount"]
+            .sum()
+            .reset_index()
+            .sort_values("total_amount", ascending=False)
+        )
+        fig_geo = px.bar(
+            df_geo, x="receiver_city", y="total_amount", color="total_amount"
+        )
         st.plotly_chart(fig_geo, use_container_width=True)
 
-# ---------------- Tab 6: 数据质量 ----------------
+# ==================== Tab 6: 数据质量 ====================
 with tab6:
-    st.subheader("🛡️ 自动化数据质量巡检引擎")
-    if st.button("🚀 重新跑一次全库数据校验", type="primary"):
+    st.subheader("数据质量监控")
+    if st.button("执行全库数据校验", type="primary"):
         check_sql = """
             SELECT '订单主键重复校验' AS 检验项, COUNT(order_id) - COUNT(DISTINCT order_id) AS 异常记数 FROM orders
             UNION ALL
@@ -164,5 +424,7 @@ with tab6:
             SELECT '负数/零金额订单校验', COUNT(order_id) FROM orders WHERE total_amount <= 0
         """
         df_check = run_sql(check_sql)
-        df_check["校验状态"] = df_check["异常记数"].apply(lambda x: "✅ PASS" if x == 0 else "❌ FAIL")
+        df_check["校验状态"] = df_check["异常记数"].apply(
+            lambda x: "✅ PASS" if x == 0 else "❌ FAIL"
+        )
         st.dataframe(df_check, use_container_width=True, hide_index=True)
