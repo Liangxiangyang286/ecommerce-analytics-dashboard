@@ -757,60 +757,53 @@ with tab4:
             df_full_grid, df_single_grouped, on=group_col, how="left"
         ).fillna(0)
 
+# ---------------- 绘图（已优化：折线图最顶层 + 半透明柱状图） ----------------
         st.markdown(f"**{selected_prod_label} 销售趋势**")
         fig_single = go.Figure()
 
-        # 销量：黄框浅黄柱状图
-        fig_single.add_trace(
-            go.Bar(
-                x=df_single_trend[group_col],
-                y=df_single_trend["sales"],
-                name="销量",
-                yaxis="y2",
-                marker_color="#fef08a",
-                marker_line_color="#fde047",
-                marker_line_width=1,
-            )
-        )
+        # 1. 【先添加柱状图】：作为背景层，使用半透明黄（rgba），防止强行遮挡
+        fig_single.add_trace(go.Bar(
+            x=df_single_trend[group_col],
+            y=df_single_trend["sales"],
+            name="销量",
+            yaxis="y2",
+            marker_color="rgba(254, 240, 138, 0.75)",  # 75% 浅透明黄
+            marker_line_color="#eab308",
+            marker_line_width=1.2
+        ))
 
-        # 销售额：蓝色折线图
-        fig_single.add_trace(
-            go.Scatter(
-                x=df_single_trend[group_col],
-                y=df_single_trend["gmv"],
-                name="销售额",
-                mode="lines+markers",
-                line=dict(color="#2563eb", width=2.5),
-                marker=dict(size=6, color="#2563eb"),
-            )
-        )
+        # 2. 【后添加折线图】：作为前景层，必定会浮在柱状图上方！
+        fig_single.add_trace(go.Scatter(
+            x=df_single_trend[group_col],
+            y=df_single_trend["gmv"],
+            name="销售额",
+            mode="lines+markers",
+            line=dict(color="#2563eb", width=3),  # 加粗折线，更醒目
+            marker=dict(size=7, color="#1d4ed8", symbol="circle")
+        ))
 
+        # 3. 布局优化：设置 bar opacity 和坐标轴展示
         fig_single.update_layout(
             xaxis=dict(type="category", showgrid=False),
             yaxis=dict(
-                title="销售额 (元)",
-                showgrid=True,
-                gridcolor="#f1f5f9",
-                zeroline=True,
-                zerolinecolor="#cbd5e1",
+                title="销售额 (元)", 
+                showgrid=True, 
+                gridcolor="#f1f5f9", 
+                zeroline=True, 
+                zerolinecolor="#cbd5e1"
             ),
             yaxis2=dict(
-                title="销量",
-                overlaying="y",
-                side="right",
-                showgrid=False,
-                zeroline=False,
+                title="销量", 
+                overlaying="y", 
+                side="right", 
+                showgrid=False, 
+                zeroline=False
             ),
-            legend=dict(
-                orientation="h",
-                x=0.35,
-                y=1.12,
-                bgcolor="rgba(255,255,255,0.8)",
-            ),
+            legend=dict(orientation="h", x=0.35, y=1.12, bgcolor="rgba(255,255,255,0.8)"),
             height=360,
             margin=dict(l=20, r=20, t=30, b=20),
             hovermode="x unified",
-            plot_bgcolor="white",
+            plot_bgcolor="white"
         )
         st.plotly_chart(fig_single, use_container_width=True)
 
