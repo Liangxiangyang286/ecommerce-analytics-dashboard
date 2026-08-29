@@ -587,18 +587,257 @@ with tab3:
 
 # ==================== Tab 4: 商品分析 ====================
 with tab4:
-    st.subheader("商品与品类分析")
-    if not df_all.empty:
-        df_cat = (
-            df_all[df_all["order_status"].isin(["已付款", "已发货", "已完成"])]
-            .groupby(["category", "platform"])["total_amount"]
+    st.subheader("单品销售趋势")
+
+    if df_valid.empty:
+        st.warning("⚠️ 当前筛选条件下无有效订单，无法展示商品分析。")
+    else:
+        # 1. 构造商品唯一标识与下拉菜单选项
+        df_prod_base = df_valid.copy()
+        if "product_id" not in df_prod_base.columns:
+            df_prod_base["product_id"] = (
+                df_prod_base["order_id"].astype(str) + "_P"
+            )
+
+        # 统一生成 global_product_id
+        df_prod_base["global_product_id"] = (
+            "P-"
+            + df_prod_base["platform"].str.upper()
+            + "-"
+            + df_prod_base["product_id"].astype(str)
+        )
+
+        # 商品展示标签
+        df_prod_base["product_label"] = (
+            df_prod_base["product_name"]
+            + " | "
+            + df_prod_base["platform"]
+            + " | "
+            + df_prod_base["global_product_id"]
+        )
+
+        # 下拉框选项（按销售额倒序排列，优先展示热销品）
+        prod_rank = (
+            df_prod_base.groupby("product_label")["total_amount"]
             .sum()
             .reset_index()
+            .sort_values("total_amount", ascending=False)
         )
-        fig_cat = px.bar(
-            df_cat, x="category", y="total_amount", color="platform", barmode="group"
+        prod_options = prod_rank["product_label"].tolist()
+
+        selected_prod_label = st.selectbox("选择商品", prod_options)
+
+        # 2. 时间粒度选择
+        time_granularity = st.radio(
+            "时间粒度",
+            ["按日", "按月", "按季度"],
+            horizontal=True,
+            key="prod_granularity",
         )
-        st.plotly_chart(fig_cat, use_container_width=True)
+
+        # 过滤所选商品数据
+        df_single = df_prod_base[
+            df_prod_base["product_label"] == selected_prod_label
+        ]
+
+        # 计算单品核心指标
+        single_gmv = df_single["total_amount"].sum()
+        single_sales = (
+            df_single["quantity"].sum()
+            if "quantity" in df_single.columns
+            else len(df_single)
+        )
+        single_orders = len(df_single)
+        single_avg_price = (
+            single_gmv / single_sales if single_sales > 0 else 0
+        )
+
+        # 3. 展现单品 KPI 4大指标卡
+        pk1, pk2, pk3, pk4 = st.columns(4)
+        pk1.metric("商品销售额", f"¥{single_gmv:,.2f}")
+        pk2.metric("商品销量", f"{single_sales:,}")
+        pk3.metric("商品订单数", f"{single_orders:,}")
+        pk4.metric("平均成交单价", f"¥{single_avg_price:,.2f}")
+
+        # 4. 单品趋势图（动态粒度 + 双 Y 轴）
+        if time_granularity == "按日":
+            group_col = "order_date"
+        elif time_granularity == "按月":
+            group_col = "year_month"
+        else:
+            group_col = "year_quarter"
+
+        df_single_trend = (
+            df_single.groupby(group_col)
+            .agg(
+                gmv=("total_amount", "sum"),
+                sales=(
+                    ("quantity", "sum")
+                    if "quantity" in df_single.columns
+                    else ("order_id", "count")
+                ),
+            )
+            .reset_index()
+        )
+
+        st.markdown(f"**{selected_prod_label} 销售趋势**")
+
+        fig_single = go.Figure()
+        # 销量（柱状图，副 Y 轴）
+        fig_single.add_trace(
+            go.Bar(
+                x=df_single_trend[group_col],
+                y=df_single_trend["sales"],
+                name="销量",
+                yaxis="y2",
+                marker_color="#fde047",
+                opacity=0.6,
+            )
+        )
+        # 销售额（折线图，主 Y 轴）
+        fig_single.add_trace(
+            go.Scatter(
+                x=df_single_trend[group_col],
+                y=df_single_trend["gmv"],
+                name="销售额",
+                mode="lines+markers",
+                line=dict(color="#1d4ed8", width=3),
+            )
+        )
+
+        fig_single.update_layout(
+            yaxis=dict(title="销售额 (元)", showgrid=True),
+            yaxis2=dict(
+                title="销量", overlaying="y", side="right", showgrid=False
+            ),
+            legend=dict(orientation="h", y=1.15),
+            height=380,
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig_single, use_container_width=True)
+
+        st.markdown("---")
+
+        # 5. 品类与商品排行（两列布局）
+        st.subheader("品类与商品排行")
+        col_cat, col_top = st.columns(2)
+
+        with col_cat:
+            st.markdown("**品类销售额**")
+            df_cat_sales = (
+                df_prod_base.groupby("category")["total_amount"]
+                .sum()
+                .reset_index()
+                .sort_values("total_amount", ascending=False)
+            )
+            fig_cat_bar = px.bar(
+                df_cat_sales,
+                x="category",
+                y="total_amount",
+                labels={"total_amount": "销售额", "category": "category"},
+                color_discrete_sequence=["#1d4ed8"],
+            )
+            fig_cat_bar.update_layout(height=380)
+            st.plotly_chart(fig_cat_bar, use_container_width=True)
+
+        with col_top:
+            st.markdown("**商品销售额 TOP 15**")
+            df_top15 = (
+                df_prod_base.groupby(["product_name", "platform"])[
+                    "total_amount"
+                ]
+                .sum()
+                .reset_index()
+                .sort_values("total_amount", ascending=True)
+                .tail(15)
+            )
+
+            fig_top15 = px.bar(
+                df_top15,
+                y="product_name",
+                x="total_amount",
+                color="platform",
+                orientation="h",
+                labels={
+                    "total_amount": "销售额",
+                    "product_name": "product_name",
+                },
+                color_discrete_map={
+                    "taobao": "#1d4ed8",
+                    "jd": "#60a5fa",
+                    "douyin": "#ef4444",
+                    "pinduoduo": "#ef4444",
+                },
+            )
+            fig_top15.update_layout(height=380, legend=dict(title="platform"))
+            st.plotly_chart(fig_top15, use_container_width=True)
+
+        # 6. 分析解读模块
+        st.subheader("分析解读")
+        selected_name = df_single.iloc[0]["product_name"]
+        top_cat_name = df_cat_sales.iloc[0]["category"]
+        top_cat_gmv = df_cat_sales.iloc[0]["total_amount"]
+
+        last_period_gmv = (
+            df_single_trend.iloc[-1]["gmv"]
+            if len(df_single_trend) > 0
+            else 0
+        )
+        prev_period_gmv = (
+            df_single_trend.iloc[-2]["gmv"]
+            if len(df_single_trend) > 1
+            else 0
+        )
+
+        st.info(
+            f"所选商品“**{selected_name}**”在筛选期内实现销售额 **¥{single_gmv:,.2f}**，销量 **{single_sales:,}** 件，"
+            f"最近一期销售额为 **¥{last_period_gmv:,.2f}**，上一期销售额为 **¥{prev_period_gmv:,.2f}**。"
+            f"当前销售额最高的品类为“**{top_cat_name}**”，贡献 **¥{top_cat_gmv:,.2f}**。"
+        )
+
+        # 7. 商品汇总明细表格
+        df_prod_table = (
+            df_prod_base.groupby(
+                [
+                    "global_product_id",
+                    "product_name",
+                    "category",
+                    "brand",
+                    "platform",
+                ]
+            )
+            .agg(
+                销售额=("total_amount", "sum"),
+                销量=(
+                    ("quantity", "sum")
+                    if "quantity" in df_prod_base.columns
+                    else ("order_id", "count")
+                ),
+                订单数=("order_id", "count"),
+            )
+            .reset_index()
+            .sort_values("销售额", ascending=False)
+        )
+
+        # 格式化数值展示
+        df_prod_table_show = df_prod_table.copy()
+        df_prod_table_show["销售额"] = df_prod_table_show["销售额"].round(2)
+
+        st.dataframe(
+            df_prod_table_show,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # 8. 下载完整商品分析结果 CSV 按钮
+        prod_csv = df_prod_table.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            label="下载完整商品分析结果",
+            data=prod_csv,
+            file_name=f"Product_Analysis_Result_{datetime.date.today()}.csv",
+            mime="text/csv",
+            type="primary",
+        )
 
 # ==================== Tab 5: 地域分析 ====================
 with tab5:
