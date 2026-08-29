@@ -587,7 +587,7 @@ with tab3:
 
 
 
-# ==================== Tab 4: 商品分析 ====================
+# ==================== Tab 4: 商品分析 (完整修复版) ====================
 with tab4:
     st.subheader("单品销售趋势")
 
@@ -596,15 +596,39 @@ with tab4:
     else:
         df_prod_base = df_valid.copy()
 
-        # 1. 智能提取/构建精细化的商品名称
+        # ---------------- 局部安全补全：时间列 ----------------
+        df_prod_base["order_date"] = (
+            df_prod_base["created_at"].astype(str).str[:10]
+        )
+        dt_series = pd.to_datetime(df_prod_base["order_date"])
+
+        if "year_month" not in df_prod_base.columns:
+            df_prod_base["year_month"] = dt_series.dt.strftime("%Y-%m")
+
+        if "year_quarter" not in df_prod_base.columns:
+            df_prod_base["year_quarter"] = (
+                dt_series.dt.year.astype(str)
+                + "-Q"
+                + dt_series.dt.quarter.astype(str)
+            )
+
+        # ---------------- 1. 构建商品识别标签（已修复订单量均显示为1的问题） ----------------
         if (
             "product_name" in df_prod_base.columns
-            and df_prod_base["product_name"].nunique() > 10
+            and df_prod_base["product_name"].nunique() > 1
         ):
-            pass
-        elif "goods_name" in df_prod_base.columns:
-            df_prod_base["product_name"] = df_prod_base["goods_name"]
+            df_prod_base["product_name"] = df_prod_base["product_name"].fillna(
+                "未知商品"
+            )
+        elif (
+            "goods_name" in df_prod_base.columns
+            and df_prod_base["goods_name"].nunique() > 1
+        ):
+            df_prod_base["product_name"] = df_prod_base["goods_name"].fillna(
+                "未知商品"
+            )
         else:
+            # 去除 index 强制离散化逻辑，改按品牌/品类真实归类聚合
             cat_series = (
                 df_prod_base["category"].astype(str)
                 if "category" in df_prod_base.columns
@@ -615,19 +639,13 @@ with tab4:
                 if "brand" in df_prod_base.columns
                 else "品牌"
             )
-            idx_series = (df_prod_base.index % 90 + 10).astype(str)
-
-            df_prod_base["product_name"] = (
-                brand_series + " " + cat_series + " " + idx_series
-            )
+            df_prod_base["product_name"] = brand_series + " - " + cat_series
 
         if "product_id" not in df_prod_base.columns:
             if "goods_id" in df_prod_base.columns:
                 df_prod_base["product_id"] = df_prod_base["goods_id"]
             else:
-                df_prod_base["product_id"] = (
-                    df_prod_base["order_id"].astype(str) + "_P"
-                )
+                df_prod_base["product_id"] = df_prod_base["product_name"]
 
         df_prod_base["global_product_id"] = (
             "P-"
@@ -635,16 +653,13 @@ with tab4:
             + "-"
             + df_prod_base["product_id"].astype(str)
         )
-
         df_prod_base["product_label"] = (
             df_prod_base["product_name"].astype(str)
             + " | "
             + df_prod_base["platform"]
-            + " | "
-            + df_prod_base["global_product_id"]
         )
 
-        # 优先选择订单量多、销售额高的爆款商品
+        # 爆款排序
         prod_rank = (
             df_prod_base.groupby("product_label")
             .agg(
@@ -656,11 +671,11 @@ with tab4:
                 by=["order_cnt", "total_gmv"], ascending=[False, False]
             )
         )
-        prod_options = prod_rank["product_label"].tolist()
 
+        prod_options = prod_rank["product_label"].tolist()
         selected_prod_label = st.selectbox("选择商品", prod_options, index=0)
 
-        # 时间粒度选择（默认按月展示）
+        # 时间粒度选择
         time_granularity = st.radio(
             "时间粒度",
             ["按日", "按月", "按季度"],
@@ -673,7 +688,7 @@ with tab4:
             df_prod_base["product_label"] == selected_prod_label
         ].copy()
 
-        # KPI 卡片
+        # 顶部 KPI 卡片
         single_gmv = df_single["total_amount"].sum()
         single_sales = (
             df_single["quantity"].sum()
@@ -691,49 +706,38 @@ with tab4:
         pk3.metric("商品订单数", f"{single_orders:,}")
         pk4.metric("平均成交单价", f"¥{single_avg_price:,.2f}")
 
-        # 2. 补全时间轴网格（修复 Pandas 2.2+ 废弃 freq='Q' 导致的 ValueError）
-        min_date = pd.to_datetime(df_valid["order_date"].min())
-        max_date = pd.to_datetime(df_valid["order_date"].max())
+        # ---------------- 2. 销售趋势图（包含完整时间轴网格） ----------------
+        min_dt = pd.to_datetime(start_d)
+        max_dt = pd.to_datetime(end_d)
 
-        if pd.api.types.is_datetime64_any_dtype(df_single["order_date"]):
-            df_single["date_day_str"] = df_single["order_date"].dt.strftime(
-                "%Y-%m-%d"
-            )
-        else:
-            df_single["date_day_str"] = (
-                df_single["order_date"].astype(str).str.split(" ").str[0]
-            )
+        df_single["date_day_str"] = df_single["order_date"].astype(str)
 
         if time_granularity == "按日":
             full_time_range = (
-                pd.date_range(min_date, max_date, freq="D")
+                pd.date_range(min_dt, max_dt, freq="D")
                 .strftime("%Y-%m-%d")
                 .tolist()
             )
             group_col = "date_day_str"
         elif time_granularity == "按月":
             full_time_range = (
-                pd.date_range(min_date, max_date, freq="MS")
+                pd.date_range(min_dt, max_dt, freq="MS")
                 .strftime("%Y-%m")
                 .tolist()
             )
             group_col = "year_month"
         else:
-            # 兼容 Pandas 新旧版本的季度频率表示方法
-            try:
-                full_quarters = pd.date_range(min_date, max_date, freq="QE")
-            except Exception:
-                full_quarters = pd.date_range(min_date, max_date, freq="Q")
-
-            full_time_range = sorted(
-                list(set([f"{d.year}-Q{d.quarter}" for d in full_quarters]))
-            )
-            if not full_time_range:
-                full_time_range = [
-                    f"{min_date.year}-Q{(min_date.month-1)//3+1}"
-                ]
+            # 纯 Python 计算季度列表，避开 Pandas freq='Q' 弃用警告
+            start_q_val = min_dt.year * 4 + (min_dt.month - 1) // 3
+            end_q_val = max_dt.year * 4 + (max_dt.month - 1) // 3
+            full_time_range = []
+            for q_val in range(start_q_val, end_q_val + 1):
+                y = q_val // 4
+                q = (q_val % 4) + 1
+                full_time_range.append(f"{y}-Q{q}")
             group_col = "year_quarter"
 
+        # 聚合所选单品数据
         df_single_grouped = (
             df_single.groupby(group_col)
             .agg(
@@ -747,17 +751,16 @@ with tab4:
             .reset_index()
         )
 
-        # 补全未销售周期的 0 值，保证 X 轴间隙匀称
+        # 补全无交易的时间节点 (填充 0)
         df_full_grid = pd.DataFrame({group_col: full_time_range})
         df_single_trend = pd.merge(
             df_full_grid, df_single_grouped, on=group_col, how="left"
         ).fillna(0)
 
         st.markdown(f"**{selected_prod_label} 销售趋势**")
-
         fig_single = go.Figure()
 
-        # 销量：浅黄色柱状图
+        # 销量：黄框浅黄柱状图
         fig_single.add_trace(
             go.Bar(
                 x=df_single_trend[group_col],
@@ -770,7 +773,7 @@ with tab4:
             )
         )
 
-        # 销售额：自然平滑蓝色高亮折线
+        # 销售额：蓝色折线图
         fig_single.add_trace(
             go.Scatter(
                 x=df_single_trend[group_col],
@@ -813,10 +816,9 @@ with tab4:
 
         st.markdown("---")
 
-        # 3. 排行榜模块
+        # ---------------- 3. 品类与商品排行 ----------------
         st.subheader("品类与商品排行")
         col_cat, col_top = st.columns(2)
-
         cat_col_name = (
             "category" if "category" in df_prod_base.columns else "platform"
         )
@@ -829,7 +831,6 @@ with tab4:
                 .reset_index()
                 .sort_values("total_amount", ascending=False)
             )
-
             fig_cat_bar = px.bar(
                 df_cat_sales,
                 x=cat_col_name,
@@ -858,7 +859,6 @@ with tab4:
                 .sort_values("total_amount", ascending=True)
                 .tail(15)
             )
-
             fig_top15 = px.bar(
                 df_top15,
                 y="product_name",
@@ -884,7 +884,7 @@ with tab4:
             )
             st.plotly_chart(fig_top15, use_container_width=True)
 
-        # 4. 分析解读
+        # ---------------- 4. 动态分析解读 ----------------
         st.subheader("分析解读")
         selected_name = df_single.iloc[0]["product_name"]
         top_cat_name = df_cat_sales.iloc[0][cat_col_name]
@@ -895,7 +895,7 @@ with tab4:
             f"当前销售额最高的品类为“**{top_cat_name}**”，贡献 **¥{top_cat_gmv:,.2f}**。"
         )
 
-        # 5. 明细表格与导出
+        # ---------------- 5. 数据明细表与 CSV 导出 ----------------
         df_prod_table = (
             df_prod_base.groupby(
                 [
@@ -934,6 +934,9 @@ with tab4:
             mime="text/csv",
             type="primary",
         )
+
+
+
 
 
 # ==================== Tab 5: 地域分析 ====================
