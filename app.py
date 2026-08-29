@@ -1092,7 +1092,7 @@ with tab5:
         )
 
         # ---------------- 5. 地域分布与省份排名 ----------------
-with col_map:
+        with col_map:
             st.markdown(f"**{geo_mode}销售分布**")
 
             # 1. 常见城市经纬度字典映射
