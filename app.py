@@ -1,11 +1,12 @@
-import sqlite3
 import datetime
+import sqlite3
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+# 页面基础配置
 st.set_page_config(
     page_title="多平台电商经营分析看板",
     layout="wide",
@@ -18,15 +19,16 @@ st.caption(
 )
 
 
+# 数据库查询辅助函数
 def run_sql(query, params=()):
     with sqlite3.connect("ecommerce.db") as conn:
         return pd.read_sql_query(query, conn, params=params)
 
 
-# ---------------- 侧边栏全局筛选 ----------------
+# 全局筛选条件
 st.sidebar.header("筛选条件")
 
-# 日期范围选择器
+# 时间维度筛选
 min_date = datetime.date(2025, 1, 1)
 max_date = datetime.date(2026, 12, 31)
 date_range = st.sidebar.date_input(
@@ -41,7 +43,7 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
 else:
     start_d, end_d = min_date, max_date
 
-# 平台多选器
+# 渠道平台筛选
 selected_platforms = st.sidebar.multiselect(
     "平台",
     ["pinduoduo", "jd", "douyin"],
@@ -51,7 +53,7 @@ plat_str = (
     "','".join(selected_platforms) if selected_platforms else "no_platform"
 )
 
-# ---------------- 加载数据 ----------------
+# 核心订单数据集加载
 sql_main = f"""
     SELECT *, 
            date(created_at) as order_date,
@@ -68,7 +70,7 @@ sql_main = f"""
 """
 df_all = run_sql(sql_main)
 
-# 6大分析 Tab 栏
+# 主分析模块视图切分
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     [
         "经营总览",
@@ -80,17 +82,19 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     ]
 )
 
-# ==================== Tab 1: 经营总览 ====================
+# ------------------------------------------------------------------------------
+# Tab 1: 经营总览
+# ------------------------------------------------------------------------------
 with tab1:
     if df_all.empty:
         st.warning("⚠️ 当前筛选条件下暂无订单数据，请重新选择平台或日期范围。")
     else:
-        # 有效订单过滤
+        # 过滤有效订单数据
         df_valid = df_all[
             df_all["order_status"].isin(["已付款", "已发货", "已完成"])
         ]
 
-        # 1. 顶部全盘大盘指标
+        # 核心汇总指标计算
         total_gmv = df_valid["total_amount"].sum()
         total_orders = len(df_valid)
         total_users = df_valid["user_id"].nunique()
@@ -108,10 +112,10 @@ with tab1:
 
         st.markdown("---")
 
-        # 2. 单日 GMV 查询板块
+        # 单日经营数据查询
         st.subheader("单日 GMV 查询")
 
-        # 获取数据集中存在的日期供选取
+        # 匹配有效日期序列与默认值
         available_dates = pd.to_datetime(df_all["order_date"]).dt.date.unique()
         available_dates.sort()
         default_single_date = (
@@ -130,7 +134,7 @@ with tab1:
             key="single_date_picker",
         )
 
-        # 单日指标计算
+        # 目标日与前一日对比指标计算
         target_date_str = str(selected_single_date)
         prev_date_str = str(
             selected_single_date - datetime.timedelta(days=1)
@@ -160,7 +164,7 @@ with tab1:
 
         st.markdown("---")
 
-        # 3. 每日 GMV 趋势 (按日)
+        # 日度 GMV 趋势图表
         st.subheader("每日 GMV 趋势（可悬停查看具体日期）")
         df_daily = (
             df_valid.groupby("order_date")["total_amount"].sum().reset_index()
@@ -179,7 +183,7 @@ with tab1:
 
         st.markdown("---")
 
-        # 4. 月度与季度 GMV 多粒度并排展现
+        # 月度与季度多粒度分析视图
         st.subheader("月度与季度 GMV")
         col_m, col_q = st.columns(2)
 
@@ -277,7 +281,7 @@ with tab1:
 
         st.markdown("---")
 
-        # 5. 平台对比与订单状态分布
+        # 渠道分布与订单状态视图
         col_p, col_s = st.columns(2)
         with col_p:
             st.markdown("**平台 GMV**")
@@ -303,7 +307,7 @@ with tab1:
             )
             st.plotly_chart(fig_status, use_container_width=True)
 
-        # 6. 分析解读自动生成模块
+        # 经营数据分析文本生成
         st.subheader("分析解读")
         top_plat = (
             df_plat.sort_values("total_amount", ascending=False).iloc[0][
@@ -337,25 +341,26 @@ with tab1:
             f"最近月份（{last_month}）日均 GMV 为 ¥{last_month_avg:,.2f}，较上一月变化 **{last_month_mom:+.1f}%**。"
         )
 
-# ==================== Tab 2: 转化漏斗 ====================
+# ------------------------------------------------------------------------------
+# Tab 2: 转化漏斗
+# ------------------------------------------------------------------------------
 with tab2:
     st.subheader("用户转化漏斗（阶段内去重用户）")
 
-    # 1. 动态/合理的漏斗数据计算（保证递减逻辑与占比正确）
-    # 基于当前筛选出的有效订单用户数作为基准进行合理推算
+    # 基于当前筛选出的有效订单用户数作为基准计算漏斗各阶段数据
     base_users = (
         df_valid["user_id"].nunique() if "df_valid" in locals() and not df_valid.empty else 2711
     )
     if base_users == 0:
         base_users = 2711
 
-    # 按照标准电商转化率递减推算
+    # 电商转化路径递减推算
     pay_users = base_users
     order_users = int(pay_users / 0.888)  # 环节转化率 ~88.8%
     cart_users = int(order_users / 0.825)  # 环节转化率 ~82.5%
     pv_users = int(cart_users / 0.873)  # 环节转化率 ~87.3%
 
-    # 行为次数推算 (通常次数 > 用户数)
+    # 用户行为频次推算
     pv_cnt = int(pv_users * 2.01)
     cart_cnt = int(cart_users * 1.70)
     order_cnt = int(order_users * 1.43)
@@ -369,13 +374,13 @@ with tab2:
         }
     )
 
-    # 计算转化率指标
+    # 转化率指标计算
     first_user_cnt = funnel_data.loc[0, "用户数"]
     funnel_data["相对首环节转化率"] = (
         funnel_data["用户数"] / first_user_cnt * 100
     ).map("{:.1f}%".format)
 
-    # 环节转化率（当前环节用户数 / 上一环节用户数）
+    # 环节转化率计算
     conversion_rates = [100.0]
     for i in range(1, len(funnel_data)):
         rate = (
@@ -386,7 +391,7 @@ with tab2:
         conversion_rates.append(rate)
     funnel_data["环节转化率"] = [f"{r:.1f}%" for r in conversion_rates]
 
-    # 2. 画漏斗图
+    # 绘制漏斗图
     fig_funnel = px.funnel(
         funnel_data,
         x="用户数",
@@ -397,14 +402,14 @@ with tab2:
     fig_funnel.update_layout(height=320)
     st.plotly_chart(fig_funnel, use_container_width=True)
 
-    # 3. 数据表格展示 (图 2 样式)
+    # 漏斗明细数据表展示
     st.dataframe(
         funnel_data,
         use_container_width=True,
         hide_index=True,
     )
 
-    # 4. 专业分析解读 (图 2 样式)
+    # 转化漏斗分析文本生成
     st.subheader("分析解读")
 
     overall_rate = (pay_users / pv_users * 100) if pv_users > 0 else 0
@@ -418,18 +423,20 @@ with tab2:
     )
 
     st.warning(
-        "💡 **口径说明**：当前漏斗按所选时间段内的去重用户计算，不代表严格的同一会话顺序漏斗；"
+        "**口径说明**：当前漏斗按所选时间段内的去重用户计算，不代表严格的同一会话顺序漏斗；"
         "若要评价页面流程，应进一步按 `session_id` 和行为时间验证先后顺序。"
     )
 
-# ==================== Tab 3: 用户 RFM ====================
+# ------------------------------------------------------------------------------
+# Tab 3: 用户 RFM
+# ------------------------------------------------------------------------------
 with tab3:
     st.subheader("用户 RFM 分层分析")
 
     if df_valid.empty:
         st.warning("⚠️ 当前筛选条件下无有效订单，无法进行 RFM 分层。")
     else:
-        # 1. 基于当前筛选数据计算真实/高质量 RFM 指标
+        # 计算 RFM 基础指标
         max_order_date = pd.to_datetime(df_valid["created_at"]).max()
 
         rfm_df = (
@@ -447,7 +454,7 @@ with tab3:
             max_order_date - rfm_df["最近购买"]
         ).dt.days
 
-        # RFM 打分 (1-4分)
+        # RFM 分位数打分 (1-4分)
         rfm_df["R"] = pd.qcut(
             rfm_df["最近购买间隔"].rank(method="first"),
             q=4,
@@ -466,7 +473,7 @@ with tab3:
 
         rfm_df["RFM总分"] = rfm_df["R"] + rfm_df["F"] + rfm_df["M"]
 
-        # 根据综合得分赋予专业分层标签
+        # 根据 RFM 综合得分匹配用户分层标签
         def label_rfm(score):
             if score >= 10:
                 return "高价值用户"
@@ -481,11 +488,11 @@ with tab3:
 
         rfm_df["用户分层"] = rfm_df["RFM总分"].apply(label_rfm)
 
-        # 构造图表展示用列名（匹配截图规范）
+        # 格式化展示字段
         rfm_df["global_user_id"] = "U-" + rfm_df["user_id"].astype(str)
         rfm_df["最近购买"] = rfm_df["最近购买"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 2. 绘制饼图与柱状图（两列并排）
+        # 用户结构饼图与分层均值柱状图绘制
         col_pie, col_bar = st.columns(2)
 
         with col_pie:
@@ -529,7 +536,7 @@ with tab3:
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
-        # 3. 分析解读
+        # RFM 分层分析文本生成
         st.subheader("分析解读")
 
         total_rfm_users = len(rfm_df)
@@ -548,7 +555,7 @@ with tab3:
             f"不同层级可分别用于核心用户维护、潜力用户培育和沉睡用户召回。"
         )
 
-        # 4. RFM 明细表格 (精选要展示的列)
+        # RFM 用户明细数据表展示
         display_cols = [
             "global_user_id",
             "最近购买",
@@ -574,7 +581,7 @@ with tab3:
             hide_index=True,
         )
 
-        # 5. 下载完整 RFM 结果栏目 (导出 CSV 按钮)
+        # 导出 CSV 文件按钮
         csv_data = df_table_show.to_csv(index=False).encode("utf-8-sig")
 
         st.download_button(
@@ -586,17 +593,16 @@ with tab3:
         )
 
 
-
-# ==================== Tab 4: 商品分析 (完整修复版) ====================
+# Tab 4: 商品分析
 with tab4:
     st.subheader("单品销售趋势")
 
     if df_valid.empty:
-        st.warning("⚠️ 当前筛选条件下无有效订单，无法展示商品分析。")
+        st.warning("当前筛选条件下无有效订单，无法展示商品分析。")
     else:
         df_prod_base = df_valid.copy()
 
-        # ---------------- 局部安全补全：时间列 ----------------
+        # 补全时间维度列
         df_prod_base["order_date"] = (
             df_prod_base["created_at"].astype(str).str[:10]
         )
@@ -612,7 +618,7 @@ with tab4:
                 + dt_series.dt.quarter.astype(str)
             )
 
-        # ---------------- 1. 构建商品识别标签（已修复订单量均显示为1的问题） ----------------
+        # 构建商品识别标签
         if (
             "product_name" in df_prod_base.columns
             and df_prod_base["product_name"].nunique() > 1
@@ -628,7 +634,6 @@ with tab4:
                 "未知商品"
             )
         else:
-            # 去除 index 强制离散化逻辑，改按品牌/品类真实归类聚合
             cat_series = (
                 df_prod_base["category"].astype(str)
                 if "category" in df_prod_base.columns
@@ -659,7 +664,7 @@ with tab4:
             + df_prod_base["platform"]
         )
 
-        # 爆款排序
+        # 计算商品销量与销售额排序
         prod_rank = (
             df_prod_base.groupby("product_label")
             .agg(
@@ -675,7 +680,7 @@ with tab4:
         prod_options = prod_rank["product_label"].tolist()
         selected_prod_label = st.selectbox("选择商品", prod_options, index=0)
 
-        # 时间粒度选择
+        # 筛选时间粒度
         time_granularity = st.radio(
             "时间粒度",
             ["按日", "按月", "按季度"],
@@ -688,7 +693,7 @@ with tab4:
             df_prod_base["product_label"] == selected_prod_label
         ].copy()
 
-        # 顶部 KPI 卡片
+        # 计算单品核心指标
         single_gmv = df_single["total_amount"].sum()
         single_sales = (
             df_single["quantity"].sum()
@@ -706,7 +711,7 @@ with tab4:
         pk3.metric("商品订单数", f"{single_orders:,}")
         pk4.metric("平均成交单价", f"¥{single_avg_price:,.2f}")
 
-        # ---------------- 2. 销售趋势图（包含完整时间轴网格） ----------------
+        # 生成完整时间轴网格
         min_dt = pd.to_datetime(start_d)
         max_dt = pd.to_datetime(end_d)
 
@@ -727,7 +732,6 @@ with tab4:
             )
             group_col = "year_month"
         else:
-            # 纯 Python 计算季度列表，避开 Pandas freq='Q' 弃用警告
             start_q_val = min_dt.year * 4 + (min_dt.month - 1) // 3
             end_q_val = max_dt.year * 4 + (max_dt.month - 1) // 3
             full_time_range = []
@@ -737,7 +741,7 @@ with tab4:
                 full_time_range.append(f"{y}-Q{q}")
             group_col = "year_quarter"
 
-        # 聚合所选单品数据
+        # 聚合单品时间序列数据
         df_single_grouped = (
             df_single.groupby(group_col)
             .agg(
@@ -751,38 +755,38 @@ with tab4:
             .reset_index()
         )
 
-        # 补全无交易的时间节点 (填充 0)
+        # 对空缺时间节点进行 0 填充
         df_full_grid = pd.DataFrame({group_col: full_time_range})
         df_single_trend = pd.merge(
             df_full_grid, df_single_grouped, on=group_col, how="left"
         ).fillna(0)
 
-# ---------------- 绘图（已优化：折线图最顶层 + 半透明柱状图） ----------------
+        # 绘制单品销售趋势图（背景柱状图 + 前景折线图）
         st.markdown(f"**{selected_prod_label} 销售趋势**")
         fig_single = go.Figure()
 
-        # 1. 【先添加柱状图】：作为背景层，使用半透明黄（rgba），防止强行遮挡
+        # 添加销量柱状图
         fig_single.add_trace(go.Bar(
             x=df_single_trend[group_col],
             y=df_single_trend["sales"],
             name="销量",
             yaxis="y2",
-            marker_color="rgba(254, 240, 138, 0.75)",  # 75% 浅透明黄
+            marker_color="rgba(254, 240, 138, 0.75)",
             marker_line_color="#eab308",
             marker_line_width=1.2
         ))
 
-        # 2. 【后添加折线图】：作为前景层，必定会浮在柱状图上方！
+        # 添加销售额折线图
         fig_single.add_trace(go.Scatter(
             x=df_single_trend[group_col],
             y=df_single_trend["gmv"],
             name="销售额",
             mode="lines+markers",
-            line=dict(color="#2563eb", width=3),  # 加粗折线，更醒目
+            line=dict(color="#2563eb", width=3),
             marker=dict(size=7, color="#1d4ed8", symbol="circle")
         ))
 
-        # 3. 布局优化：设置 bar opacity 和坐标轴展示
+        # 配置双坐标轴与布局
         fig_single.update_layout(
             xaxis=dict(type="category", showgrid=False),
             yaxis=dict(
@@ -807,9 +811,7 @@ with tab4:
         )
         st.plotly_chart(fig_single, use_container_width=True)
 
-        st.markdown("---")
-
-        # ---------------- 3. 品类与商品排行 ----------------
+        # 品类与商品销售排行
         st.subheader("品类与商品排行")
         col_cat, col_top = st.columns(2)
         cat_col_name = (
@@ -877,7 +879,7 @@ with tab4:
             )
             st.plotly_chart(fig_top15, use_container_width=True)
 
-        # ---------------- 4. 动态分析解读 ----------------
+        # 分析解读文本输出
         st.subheader("分析解读")
         selected_name = df_single.iloc[0]["product_name"]
         top_cat_name = df_cat_sales.iloc[0][cat_col_name]
@@ -888,58 +890,57 @@ with tab4:
             f"当前销售额最高的品类为“**{top_cat_name}**”，贡献 **¥{top_cat_gmv:,.2f}**。"
         )
 
-        # ---------------- 5. 数据明细表与 CSV 导出 ----------------
-        df_prod_table = (
-            df_prod_base.groupby(
-                [
-                    "global_product_id",
-                    "product_name",
-                    "platform",
-                ]
-            )
-            .agg(
-                销售额=("total_amount", "sum"),
-                销量=(
-                    ("quantity", "sum")
-                    if "quantity" in df_prod_base.columns
-                    else ("order_id", "count")
-                ),
-                订单数=("order_id", "count"),
-            )
-            .reset_index()
-            .sort_values("销售额", ascending=False)
-        )
+        # 数据明细表与 CSV 导出
+df_prod_table = (
+    df_prod_base.groupby(
+        [
+            "global_product_id",
+            "product_name",
+            "platform",
+        ]
+    )
+    .agg(
+        销售额=("total_amount", "sum"),
+        销量=(
+            ("quantity", "sum")
+            if "quantity" in df_prod_base.columns
+            else ("order_id", "count")
+        ),
+        订单数=("order_id", "count"),
+    )
+    .reset_index()
+    .sort_values("销售额", ascending=False)
+)
 
-        df_prod_table_show = df_prod_table.copy()
-        df_prod_table_show["销售额"] = df_prod_table_show["销售额"].round(2)
+df_prod_table_show = df_prod_table.copy()
+df_prod_table_show["销售额"] = df_prod_table_show["销售额"].round(2)
 
-        st.dataframe(
-            df_prod_table_show,
-            use_container_width=True,
-            hide_index=True,
-        )
+st.dataframe(
+    df_prod_table_show,
+    use_container_width=True,
+    hide_index=True,
+)
 
-        prod_csv = df_prod_table.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            label="下载完整商品分析结果",
-            data=prod_csv,
-            file_name=f"Product_Analysis_Result_{datetime.date.today()}.csv",
-            mime="text/csv",
-            type="primary",
-        )
+prod_csv = df_prod_table.to_csv(index=False).encode("utf-8-sig")
+st.download_button(
+    label="下载完整商品分析结果",
+    data=prod_csv,
+    file_name=f"Product_Analysis_Result_{datetime.date.today()}.csv",
+    mime="text/csv",
+    type="primary",
+)
 
 
-
-# ==================== Tab 5: 地域分析 (高级复刻版) ====================
+# Tab 5: 地域分析
 with tab5:
     st.subheader("地域销售分析")
 
     if df_valid.empty:
-        st.warning("⚠️ 当前筛选条件下无有效订单，无法展示地域分析。")
+        st.warning("当前筛选条件下无有效订单，无法展示地域分析。")
     else:
         df_geo_base = df_valid.copy()
 
-        # ---------------- 1. 口径切换与数据预处理 ----------------
+        # 口径切换与数据预处理
         geo_mode = st.radio(
             "地域统计口径",
             ["收货城市", "用户注册城市"],
@@ -948,7 +949,7 @@ with tab5:
             key="geo_mode_radio"
         )
 
-        # 映射字段（若数据缺少注册城市或省份，自动建立合理逻辑补全）
+        # 映射城市与省份字段
         if geo_mode == "用户注册城市":
             city_col = "reg_city" if "reg_city" in df_geo_base.columns else "city"
             prov_col = "reg_province" if "reg_province" in df_geo_base.columns else "province"
@@ -956,7 +957,7 @@ with tab5:
             city_col = "city" if "city" in df_geo_base.columns else "receiver_city"
             prov_col = "province" if "province" in df_geo_base.columns else "receiver_province"
 
-        # 兜底：如果缺乏城市/省份字段，基于默认城市列表映射
+        # 缺失字段兜底填充
         if city_col not in df_geo_base.columns:
             cities_mock = ["南京", "杭州", "上海", "西安", "广州", "北京", "成都", "重庆", "深圳", "武汉"]
             df_geo_base[city_col] = df_geo_base["order_id"].apply(lambda x: cities_mock[hash(str(x)) % len(cities_mock)])
@@ -969,27 +970,24 @@ with tab5:
         if prov_col not in df_geo_base.columns:
             df_geo_base[prov_col] = df_geo_base[city_col].map(prov_map).fillna("其他")
 
-        # 时间列补充
+        # 补全时间轴列与用户识别标识
         df_geo_base["order_date"] = df_geo_base["created_at"].astype(str).str[:10]
         dt_geo = pd.to_datetime(df_geo_base["order_date"])
         df_geo_base["year_month"] = dt_geo.dt.strftime("%Y-%m")
         df_geo_base["year_quarter"] = dt_geo.dt.year.astype(str) + "-Q" + dt_geo.dt.quarter.astype(str)
         user_id_col = "user_id" if "user_id" in df_geo_base.columns else "order_id"
 
-        # ---------------- 2. 顶部核心 KPI 卡片 ----------------
+        # 计算核心地域指标
         total_geo_gmv = df_geo_base["total_amount"].sum()
         
-        # 最高城市
         city_summary = df_geo_base.groupby(city_col)["total_amount"].sum().reset_index()
         top_city = city_summary.sort_values("total_amount", ascending=False).iloc[0][city_col] if not city_summary.empty else "无"
         top_city_gmv = city_summary.sort_values("total_amount", ascending=False).iloc[0]["total_amount"] if not city_summary.empty else 0
         
-        # 最高省份
         prov_summary = df_geo_base.groupby(prov_col)["total_amount"].sum().reset_index()
         top_prov = prov_summary.sort_values("total_amount", ascending=False).iloc[0][prov_col] if not prov_summary.empty else "无"
         top_prov_gmv = prov_summary.sort_values("total_amount", ascending=False).iloc[0]["total_amount"] if not prov_summary.empty else 0
 
-        # 识别率
         valid_geo_cnt = df_geo_base[city_col].notna().sum()
         geo_rate = (valid_geo_cnt / len(df_geo_base)) * 100 if len(df_geo_base) > 0 else 100.0
 
@@ -1001,7 +999,7 @@ with tab5:
 
         st.markdown("---")
 
-        # ---------------- 3. 地域 × 时间趋势 ----------------
+        # 地域与时间维度下钻趋势分析
         st.subheader("地域 × 时间趋势")
         tc1, tc2, tc3 = st.columns([1, 2, 1])
 
@@ -1017,15 +1015,12 @@ with tab5:
         with tc3:
             geo_time_gran = st.radio("时间粒度", ["按日", "按月", "按季度"], index=0, horizontal=True, key="geo_time_gran")
 
-        # 筛选特定地区数据
         df_geo_sub = df_geo_base[df_geo_base[target_col] == selected_geo].copy()
 
-        # 统计该地区的 KPI
         sub_gmv = df_geo_sub["total_amount"].sum()
         sub_orders = len(df_geo_sub)
         sub_users = df_geo_sub[user_id_col].nunique()
 
-        # 时间维度下钻聚合
         if geo_time_gran == "按日":
             t_col = "order_date"
         elif geo_time_gran == "按月":
@@ -1046,22 +1041,22 @@ with tab5:
         sk3.metric("累计订单数", f"{sub_orders:,}")
         sk4.metric("累计购买用户", f"{sub_users:,}")
 
-        # 双 Y 轴趋势图（柱状图: 订单数，折线图: GMV）
+        # 绘制双 Y 轴趋势图（柱状图展示订单数，折线图展示 GMV）
         st.markdown(f"**{selected_geo} {geo_time_gran}GMV与订单趋势**")
         fig_geo_trend = go.Figure()
 
-        # 柱状图：订单数 (背景)
+        # 添加订单数柱状图
         fig_geo_trend.add_trace(go.Bar(
             x=df_geo_trend[t_col],
             y=df_geo_trend["orders"],
             name="订单数",
             yaxis="y2",
-            marker_color="rgba(167, 243, 208, 0.7)",  # 浅绿半透明
+            marker_color="rgba(167, 243, 208, 0.7)",
             marker_line_color="#10b981",
             marker_line_width=1
         ))
 
-        # 折线图：GMV (前景)
+        # 添加 GMV 折线图
         fig_geo_trend.add_trace(go.Scatter(
             x=df_geo_trend[t_col],
             y=df_geo_trend["gmv"],
@@ -1083,7 +1078,7 @@ with tab5:
         )
         st.plotly_chart(fig_geo_trend, use_container_width=True)
 
-        # ---------------- 4. 分析解读 ----------------
+        # 地域解读文本输出
         st.subheader("分析解读")
         geo_pct = (sub_gmv / total_geo_gmv * 100) if total_geo_gmv > 0 else 0
         st.info(
@@ -1091,14 +1086,13 @@ with tab5:
             f"当前选择的{geo_level}“**{selected_geo}**”累计GMV为 **¥{sub_gmv:,.2f}**，占已识别地域GMV的 **{geo_pct:.1f}%**。"
         )
 
-        # ---------------- 5. 地域分布与省份排名 ----------------
-        # ---------------- 5. 地域分布与省份排名 ----------------
+        # 地域分布图与省份排名
         col_map, col_prov_rank = st.columns(2)
 
         with col_map:
             st.markdown(f"**{geo_mode}销售分布**")
 
-            # 1. 常见城市经纬度字典映射
+            # 主要城市经纬度字典映射
             city_geo_coords = {
                 "北京": {"lat": 39.9042, "lon": 116.4074},
                 "上海": {"lat": 31.2304, "lon": 121.4737},
@@ -1117,12 +1111,11 @@ with tab5:
                 "郑州": {"lat": 34.7466, "lon": 113.6253}
             }
 
-            # 2. 聚合城市数据并匹配经纬度
+            # 匹配城市坐标并绘制气泡地图
             df_city_map = df_geo_base.groupby(city_col)["total_amount"].sum().reset_index()
             df_city_map["lat"] = df_city_map[city_col].apply(lambda c: city_geo_coords.get(c, {}).get("lat", 35.0))
             df_city_map["lon"] = df_city_map[city_col].apply(lambda c: city_geo_coords.get(c, {}).get("lon", 105.0))
 
-            # 3. 构建 Plotly 气泡地图 (scatter_geo)
             fig_map = px.scatter_geo(
                 df_city_map,
                 lat="lat",
@@ -1136,7 +1129,7 @@ with tab5:
                 labels={"total_amount": "GMV", city_col: "城市"}
             )
 
-            # 4. 配置地图视角聚焦于中国区域
+            # 地图中心视角定位
             fig_map.update_geos(
                 scope="asia",
                 center=dict(lat=35.5, lon=104.5),
@@ -1169,7 +1162,7 @@ with tab5:
             fig_prov.update_layout(height=350, plot_bgcolor="white", coloraxis_showscale=False)
             st.plotly_chart(fig_prov, use_container_width=True)
 
-        # ---------------- 6. 城市 GMV 与客单价 / 平台构成 ----------------
+        # 城市 GMV 与客单价及平台构成分析
         col_aov, col_platform = st.columns(2)
 
         df_city_full = df_geo_base.groupby([city_col, prov_col]).agg(
@@ -1182,7 +1175,6 @@ with tab5:
 
         with col_aov:
             st.markdown("**城市 GMV 与客单价**")
-            # 横向柱状图展示 Top10 城市 GMV，颜色代表客单价
             fig_aov = px.bar(
                 df_city_full.sort_values("gmv", ascending=True),
                 y=city_col, x="gmv", color="aov", orientation="h",
@@ -1203,7 +1195,7 @@ with tab5:
             fig_plat.update_layout(height=360, plot_bgcolor="white", barmode="stack")
             st.plotly_chart(fig_plat, use_container_width=True)
 
-        # ---------------- 7. 地域数据明细表 ----------------
+        # 地域数据明细表展示
         st.subheader("地域数据明细")
         df_detail_table = df_geo_base.groupby([city_col, prov_col]).agg(
             GMV=("total_amount", "sum"),
@@ -1220,18 +1212,12 @@ with tab5:
 
 
 
-
-
-
-
-# ==================== Tab 6: 数据质量监控 (高级专业版) ====================
-# ==================== Tab 6: 数据质量监控 (安全稳定版) ====================
 with tab6:
     st.subheader("数据质量监控")
     st.caption("对全库核心数据表（订单、用户、商品、行为、明细）进行主键唯一性、外键关联性、数值逻辑及完整性检查。")
 
-    # 按钮：触发校验
-    run_check = st.button("🚀 执行完整数据质量检查", type="primary", key="btn_run_data_check")
+    # 触发质量校验按钮
+    run_check = st.button("执行完整数据质量检查", type="primary", key="btn_run_data_check")
 
     if run_check:
         with st.spinner("正在对全库数据进行多维度质量校验..."):
@@ -1247,7 +1233,7 @@ with tab6:
 
             # 辅助校验记录函数
             def add_check(category, name, err_cnt, detail_df=None):
-                status = "✅ PASS" if err_cnt == 0 else "❌ FAIL"
+                status = "PASS" if err_cnt == 0 else "FAIL"
                 check_results.append({
                     "检查类别": category,
                     "检查项": name,
@@ -1257,14 +1243,14 @@ with tab6:
                 })
 
             if target_df is not None and isinstance(target_df, pd.DataFrame):
-                # 1. 主键重复校验
+                # 主键重复校验
                 if "order_id" in target_df.columns:
                     dup_orders = target_df[target_df.duplicated("order_id", keep=False)]
                     add_check("主键唯一性", "订单主键重复校验", len(dup_orders), dup_orders)
                 else:
                     add_check("主键唯一性", "订单主键重复校验", 0)
 
-                # 用户主键
+                # 用户主键校验
                 df_u = locals().get("df_users", globals().get("df_users", locals().get("users", globals().get("users", None))))
                 if isinstance(df_u, pd.DataFrame) and "user_id" in df_u.columns:
                     dup_u = df_u[df_u.duplicated("user_id", keep=False)]
@@ -1272,7 +1258,7 @@ with tab6:
                 else:
                     add_check("主键唯一性", "用户主键重复校验", 0)
 
-                # 商品主键
+                # 商品主键校验
                 df_p = locals().get("df_products", globals().get("df_products", locals().get("products", globals().get("products", None))))
                 if isinstance(df_p, pd.DataFrame) and "product_id" in df_p.columns:
                     dup_p = df_p[df_p.duplicated("product_id", keep=False)]
@@ -1280,7 +1266,7 @@ with tab6:
                 else:
                     add_check("主键唯一性", "商品主键重复校验", 0)
 
-                # 明细主键
+                # 明细主键校验
                 df_i = locals().get("df_items", globals().get("df_items", locals().get("order_items", globals().get("order_items", None))))
                 if isinstance(df_i, pd.DataFrame) and "item_id" in df_i.columns:
                     dup_i = df_i[df_i.duplicated("item_id", keep=False)]
@@ -1288,7 +1274,7 @@ with tab6:
                 else:
                     add_check("主键唯一性", "订单明细主键重复校验", 0)
 
-                # 行为主键
+                # 行为主键校验
                 df_b = locals().get("df_behaviors", globals().get("df_behaviors", locals().get("user_behaviors", globals().get("user_behaviors", None))))
                 if isinstance(df_b, pd.DataFrame) and "behavior_id" in df_b.columns:
                     dup_b = df_b[df_b.duplicated("behavior_id", keep=False)]
@@ -1296,7 +1282,7 @@ with tab6:
                 else:
                     add_check("主键唯一性", "行为主键重复校验", 0)
 
-                # 2. 关联与孤立记录校验
+                # 关联与孤立记录校验
                 if "user_id" in target_df.columns and isinstance(df_u, pd.DataFrame) and "user_id" in df_u.columns:
                     valid_uids = set(df_u["user_id"].unique())
                     orphan_orders = target_df[~target_df["user_id"].isin(valid_uids)]
@@ -1311,7 +1297,7 @@ with tab6:
                 else:
                     add_check("关联完整性", "明细找不到对应订单 (孤立明细)", 0)
 
-                # 3. 业务逻辑校验
+                # 业务逻辑校验
                 if "total_amount" in target_df.columns:
                     invalid_amt = target_df[target_df["total_amount"] <= 0]
                     add_check("业务逻辑", "负数/零金额订单校验", len(invalid_amt), invalid_amt)
@@ -1334,7 +1320,7 @@ with tab6:
                 else:
                     add_check("业务逻辑", "未来时间订单校验", 0)
 
-                # 4. 完整性/空值校验
+                # 完整性与空值校验
                 if "city" in target_df.columns:
                     null_city = target_df[target_df["city"].isna()]
                     add_check("完整性规则", "订单缺少收货城市校验", len(null_city), null_city)
@@ -1343,7 +1329,7 @@ with tab6:
 
             df_res = pd.DataFrame(check_results)
 
-            # ---------------- 核心 KPI 汇总看板 ----------------
+            # 核心 KPI 汇总看板
             st.markdown("---")
             total_checks = len(df_res)
             fail_checks = len(df_res[df_res["异常计数"] > 0])
@@ -1356,7 +1342,7 @@ with tab6:
             qc3.metric("通过检查项", f"{pass_checks} 项")
             qc4.metric("异常/预警项", f"{fail_checks} 项", delta_color="inverse")
 
-            st.markdown("### 📋 质量检查结果明细")
+            st.markdown("### 质量检查结果明细")
 
             def style_status(val):
                 color = "#10b981" if "PASS" in str(val) else "#ef4444"
@@ -1369,15 +1355,15 @@ with tab6:
                 hide_index=True
             )
 
-            # ---------------- 异常明细下钻 ----------------
+            # 异常明细下钻展示
             if fail_checks > 0:
-                st.warning("⚠️ 发现异常数据记录！展开下方可查看具体异常数据示例：")
+                st.warning("发现异常数据记录！展开下方可查看具体异常数据示例：")
                 for idx, row in df_res[df_res["异常计数"] > 0].iterrows():
                     if row["detail"] is not None and isinstance(row["detail"], pd.DataFrame) and not row["detail"].empty:
                         with st.expander(f"查看【{row['检查项']}】异常明细 (共 {row['异常计数']} 条)"):
                             st.dataframe(row["detail"].head(20), use_container_width=True)
             else:
-                st.success("🎉 全库数据质量良好，所有检查项均为 PASS，无孤立或异常数据！")
+                st.success("全库数据质量良好，所有检查项均为 PASS，无孤立或异常数据！")
 
     else:
-        st.info("💡 请点击上方按钮【执行完整数据质量检查】开始质量审计。")
+        st.info("请点击上方按钮【执行完整数据质量检查】开始质量审计。")
