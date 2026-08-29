@@ -1092,6 +1092,9 @@ with tab5:
         )
 
         # ---------------- 5. 地域分布与省份排名 ----------------
+        # ---------------- 5. 地域分布与省份排名 ----------------
+        col_map, col_prov_rank = st.columns(2)
+
         with col_map:
             st.markdown(f"**{geo_mode}销售分布**")
 
