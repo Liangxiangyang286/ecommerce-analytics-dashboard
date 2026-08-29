@@ -644,7 +644,7 @@ with tab4:
             + df_prod_base["global_product_id"]
         )
 
-        # 【方案2核心】：优先将订单量多、销售额高的爆款商品排在最前面，确保面试官第一眼看到的图表最美观
+        # 优先选择订单量多、销售额高的爆款商品
         prod_rank = (
             df_prod_base.groupby("product_label")
             .agg(
@@ -660,7 +660,7 @@ with tab4:
 
         selected_prod_label = st.selectbox("选择商品", prod_options, index=0)
 
-        # 时间粒度选择（默认按月展示，趋势最为流畅）
+        # 时间粒度选择（默认按月展示）
         time_granularity = st.radio(
             "时间粒度",
             ["按日", "按月", "按季度"],
@@ -691,9 +691,9 @@ with tab4:
         pk3.metric("商品订单数", f"{single_orders:,}")
         pk4.metric("平均成交单价", f"¥{single_avg_price:,.2f}")
 
-        # 2. 补全时间轴网格，实现比例自然和谐的双 Y 轴趋势图
-        min_date = df_valid["order_date"].min()
-        max_date = df_valid["order_date"].max()
+        # 2. 补全时间轴网格（修复 Pandas 2.2+ 废弃 freq='Q' 导致的 ValueError）
+        min_date = pd.to_datetime(df_valid["order_date"].min())
+        max_date = pd.to_datetime(df_valid["order_date"].max())
 
         if pd.api.types.is_datetime64_any_dtype(df_single["order_date"]):
             df_single["date_day_str"] = df_single["order_date"].dt.strftime(
@@ -719,10 +719,15 @@ with tab4:
             )
             group_col = "year_month"
         else:
-            full_quarters = pd.date_range(min_date, max_date, freq="Q")
-            full_time_range = [
-                f"{d.year}-Q{d.quarter}" for d in full_quarters
-            ]
+            # 兼容 Pandas 新旧版本的季度频率表示方法
+            try:
+                full_quarters = pd.date_range(min_date, max_date, freq="QE")
+            except Exception:
+                full_quarters = pd.date_range(min_date, max_date, freq="Q")
+
+            full_time_range = sorted(
+                list(set([f"{d.year}-Q{d.quarter}" for d in full_quarters]))
+            )
             if not full_time_range:
                 full_time_range = [
                     f"{min_date.year}-Q{(min_date.month-1)//3+1}"
@@ -752,7 +757,7 @@ with tab4:
 
         fig_single = go.Figure()
 
-        # 销量：浅黄色柱状图（对标图2）
+        # 销量：浅黄色柱状图
         fig_single.add_trace(
             go.Bar(
                 x=df_single_trend[group_col],
@@ -765,7 +770,7 @@ with tab4:
             )
         )
 
-        # 销售额：自然平滑蓝色高亮折线（对标图2）
+        # 销售额：自然平滑蓝色高亮折线
         fig_single.add_trace(
             go.Scatter(
                 x=df_single_trend[group_col],
@@ -808,7 +813,7 @@ with tab4:
 
         st.markdown("---")
 
-        # 3. 排行榜模块 (对标图4)
+        # 3. 排行榜模块
         st.subheader("品类与商品排行")
         col_cat, col_top = st.columns(2)
 
