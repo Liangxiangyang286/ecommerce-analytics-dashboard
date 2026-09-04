@@ -1,11 +1,11 @@
 # 多平台电商经营分析看板 (E-commerce Analytics Dashboard)
 
-[![Streamlit App](https://static.streamlit.io/badge-svg.svg)](https://liangxiangyang-dashboard.streamlit.app)
+[![Streamlit App](https://static.streamlit.io/badge-svg.svg)](https://liangxiangyang286-ecommerce-analytics.streamlit.app)
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 
 全栈式多平台电商数据分析看板，基于 **Python + Streamlit + Plotly + SQLite** 架构搭建。针对多渠道（拼多多、京东、抖音等）运营场景，提供从宏观经营大盘到微观用户价值（RFM）与转化漏斗的精细化数据分析支持。
 
-**🔗 在线交互体验**：[https://liangxiangyang-dashboard.streamlit.app](https://liangxiangyang-dashboard.streamlit.app)
+**🔗 在线交互体验**：[https://liangxiangyang286-ecommerce-analytics.streamlit.app](https://liangxiangyang286-ecommerce-analytics.streamlit.app)
 
 ---
 
